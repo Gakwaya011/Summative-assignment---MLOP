@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import base64
 from io import BytesIO
+import pandas as pd
+import matplotlib.pyplot as plt
 
 # --- App Configuration ---
 st.set_page_config(
@@ -21,67 +23,39 @@ st.markdown("Upload a photo of a car or a motorcycle for a prediction, or upload
 
 # --- Prediction Function ---
 def get_prediction(image_bytes):
-    """
-    Sends an image to the Flask API and returns the prediction.
-    """
     try:
-        # Encode image to base64
         base64_encoded_image = base64.b64encode(image_bytes).decode('utf-8')
-        
-        # Create the payload
         payload = {"image": base64_encoded_image}
-        
-        # Send the POST request to the API
         response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=30)
         response.raise_for_status()
-        
-        # Parse the JSON response
         result = response.json()
         return result.get("predicted_class"), result.get("confidence")
-
-    except requests.exceptions.ConnectionError as e:
-        st.error(f"Failed to connect to the Flask API at {PREDICT_ENDPOINT}. Please ensure the API is running.")
-        st.error(f"Error: {e}")
-        return None, None
-    except requests.exceptions.RequestException as e:
-        st.error(f"An error occurred during the API request: {e}")
-        return None, None
     except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+        st.error(f"Prediction error: {e}")
         return None, None
 
+# --- Retrain Function ---
 def trigger_retraining(zip_file):
-    """
-    Sends a zip file of new data to the Flask API to trigger retraining.
-    """
     try:
-        files = {'zip_file': zip_file.getvalue()}
-        response = requests.post(RETRAIN_ENDPOINT, files=files, timeout=60)
+        files = {'zip_file': (zip_file.name, zip_file, 'application/zip')}
+        response = requests.post(RETRAIN_ENDPOINT, files=files, timeout=600)  # Increased timeout for training
         response.raise_for_status()
-
         result = response.json()
-        st.success(f"Retraining triggered successfully: {result['message']}")
-    except requests.exceptions.ConnectionError as e:
-        st.error(f"Failed to connect to the Flask API at {RETRAIN_ENDPOINT}. Please ensure the API is running.")
-        st.error(f"Error: {e}")
-    except requests.exceptions.RequestException as e:
-        st.error(f"An error occurred during the API request: {e}")
+        return result
     except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+        st.error(f"Retraining error: {e}")
+        return None
 
-# --- UI Layout ---
+# --- UI: Prediction ---
 st.header("Predict a Vehicle")
 uploaded_file_predict = st.file_uploader("Choose a vehicle image...", type=["jpg", "jpeg", "png"])
 
-if uploaded_file_predict is not None:
+if uploaded_file_predict:
     st.image(uploaded_file_predict, caption='Uploaded Image', use_column_width=True)
     image_bytes = uploaded_file_predict.read()
-    
-    predict_button = st.button("Predict")
-    if predict_button:
+    if st.button("Predict"):
         with st.spinner("Making prediction..."):
             predicted_class, confidence = get_prediction(image_bytes)
-            
             if predicted_class and confidence is not None:
                 st.success("Prediction complete!")
                 st.write(f"### Prediction: {predicted_class}")
@@ -89,14 +63,44 @@ if uploaded_file_predict is not None:
 
 st.divider()
 
+# --- UI: Retraining ---
 st.header("Retrain Model with New Data")
-st.markdown("Upload a zip file containing new images to retrain the model. The zip file should be structured with folders for each class (e.g., `Cars`, `Motorcycles`).")
+st.markdown(
+    "Upload a zip file containing new images to retrain the model. "
+    "The zip file should be structured with folders for each class (e.g., `Cars`, `Motorcycles`)."
+)
 uploaded_file_retrain = st.file_uploader("Choose a zip file with new data...", type=["zip"])
 
-if uploaded_file_retrain is not None:
+if uploaded_file_retrain:
     st.info(f"File '{uploaded_file_retrain.name}' uploaded. Click the button to start retraining.")
-    
-    retrain_button = st.button("Start Retraining")
-    if retrain_button:
-        with st.spinner("Starting retraining process..."):
-            trigger_retraining(uploaded_file_retrain)
+
+    if st.button("Start Retraining"):
+        with st.spinner("Starting retraining process... This may take a while..."):
+            retrain_result = trigger_retraining(uploaded_file_retrain)
+
+            if retrain_result:
+                st.success(retrain_result.get('message', 'Retraining done!'))
+
+                metrics = retrain_result.get('metrics', {})
+                if metrics:
+                    st.subheader("Retraining Metrics")
+                    # Show metrics values
+                    for metric_name, metric_value in metrics.items():
+                        st.write(f"**{metric_name.capitalize()}**: {metric_value:.4f}")
+
+                    # Plot metrics bar chart
+                    metric_names = list(metrics.keys())
+                    metric_values = [metrics[k] for k in metric_names]
+
+                    fig, ax = plt.subplots()
+                    ax.bar(metric_names, metric_values, color='skyblue')
+                    ax.set_ylim(0, 1)
+                    ax.set_title('Retraining Metrics')
+                    for i, v in enumerate(metric_values):
+                        ax.text(i, v + 0.02, f"{v:.4f}", ha='center', fontsize=10)
+                    st.pyplot(fig)
+                else:
+                    st.info("No retraining metrics available.")
+
+            else:
+                st.error("Retraining failed or returned no data.")
