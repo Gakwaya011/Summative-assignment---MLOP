@@ -4,6 +4,9 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from src.data_loader import get_datasets
+from src.model_builder import build_cnn_model as build_model
+
 
 # Add the project root to the system path
 current_script_dir = os.path.dirname(os.path.abspath(__file__))

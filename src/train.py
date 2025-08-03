@@ -26,14 +26,16 @@ def create_model():
     model.compile(
         optimizer='adam',
         loss='binary_crossentropy',
-        metrics=['accuracy', keras.metrics.Precision(), keras.metrics.Recall(), keras.metrics.AUC(name='roc_auc')]
+        metrics=[
+            'accuracy',
+            keras.metrics.Precision(),
+            keras.metrics.Recall(),
+            keras.metrics.AUC(name='roc_auc')
+        ]
     )
     return model
 
 def train_model_from_dir(data_dir):
-    """
-    Loads data, trains the model, saves the best model, and returns the training history.
-    """
     train_ds = image_dataset_from_directory(
         data_dir,
         validation_split=0.2,
@@ -42,6 +44,7 @@ def train_model_from_dir(data_dir):
         image_size=(IMG_HEIGHT, IMG_WIDTH),
         batch_size=BATCH_SIZE
     )
+
     val_ds = image_dataset_from_directory(
         data_dir,
         validation_split=0.2,
@@ -51,10 +54,12 @@ def train_model_from_dir(data_dir):
         batch_size=BATCH_SIZE
     )
 
+    model = create_model()
     if os.path.exists(MODEL_SAVE_PATH):
-        model = keras.models.load_model(MODEL_SAVE_PATH)
-    else:
-        model = create_model()
+        try:
+            model = keras.models.load_model(MODEL_SAVE_PATH)
+        except Exception as e:
+            print(f"Warning: Could not load existing model, reinitializing. Reason: {e}")
 
     callbacks = [
         EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
@@ -68,4 +73,5 @@ def train_model_from_dir(data_dir):
         epochs=EPOCHS,
         callbacks=callbacks
     )
+
     return history
