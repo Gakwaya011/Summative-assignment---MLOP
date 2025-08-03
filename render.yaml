@@ -4,17 +4,21 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn api.app:app --timeout 120
+    startCommand: gunicorn --chdir api app:app --bind 0.0.0.0:$PORT --timeout 120
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.13
+      - key: PYTHONPATH
+        value: /opt/render/project/src
 
   - type: web
     name: vehicle-classifier-ui
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run streamlit_app/streamlit_app.py
+    startCommand: streamlit run streamlit_app/streamlit_app.py --server.port $PORT --server.address 0.0.0.0
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.13
+      - key: PYTHONPATH
+        value: /opt/render/project/src
