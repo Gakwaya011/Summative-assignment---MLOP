@@ -8,3 +8,13 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.10
+
+  - type: web
+    name: vehicle-classifier-ui
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run ui.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10
