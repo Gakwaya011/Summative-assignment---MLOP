@@ -1,4 +1,3 @@
-# Final, corrected `api/app.py`
 import os
 import sys
 import base64
@@ -13,7 +12,6 @@ from werkzeug.utils import secure_filename
 # This script is in `project_root/api`, so we go one level up
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 # Insert the project root at the beginning of the system path
-# This allows imports like 'from src.predictor import ...' to work
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -30,7 +28,6 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # ... (same as before)
     image_bytes = None
 
     if 'file' in request.files:
@@ -60,7 +57,6 @@ def predict():
 
 @app.route('/retrain', methods=['POST'])
 def retrain():
-    # ... (same as before)
     if 'zip_file' not in request.files:
         return jsonify({'error': 'No zip_file in request.files'}), 400
 
@@ -69,16 +65,15 @@ def retrain():
 
     if not filename.endswith('.zip'):
         return jsonify({'error': 'Uploaded file must be a .zip file'}), 400
-
+    
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     temp_dir = os.path.join(project_root, "temp_data")
     os.makedirs(temp_dir, exist_ok=True)
 
     try:
-        # Save the zip file temporarily
         zip_file_path = os.path.join(temp_dir, filename)
         zip_file.save(zip_file_path)
 
-        # Extract the zip file
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
         
