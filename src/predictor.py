@@ -99,6 +99,10 @@ def simple_preprocess_image(image_bytes):
         # Convert bytes to PIL Image
         image = Image.open(io.BytesIO(clean_bytes))
         
+        # Optional format check (JPEG/PNG)
+        if image.format not in ["JPEG", "PNG"]:
+            raise ValueError(f"Unsupported image format: {image.format}")
+        
         # Convert to RGB
         if image.mode != 'RGB':
             image = image.convert('RGB')
@@ -124,6 +128,16 @@ def simple_preprocess_image(image_bytes):
         
     except Exception as e:
         logger.error(f"Error preprocessing image: {e}")
+        
+        # Dump image bytes for debugging
+        try:
+            debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.jpg")
+            with open(debug_path, "wb") as f:
+                f.write(image_bytes)
+            logger.info(f"Saved invalid image bytes to {debug_path} for inspection.")
+        except Exception as dump_error:
+            logger.error(f"Failed to save debug image: {dump_error}")
+        
         return None
 
 def make_prediction(image_bytes):
