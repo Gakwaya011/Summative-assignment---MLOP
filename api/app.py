@@ -1,4 +1,4 @@
-# Updated `api/app.py`
+# Final, corrected `api/app.py`
 import os
 import sys
 import base64
@@ -9,11 +9,15 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-# The project root is one level up from the current directory ('api/')
+# Get the path to the project root directory
+# This script is in `project_root/api`, so we go one level up
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-sys.path.insert(0, project_root)
+# Insert the project root at the beginning of the system path
+# This allows imports like 'from src.predictor import ...' to work
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-# Import the refactored functions
+# Now, these imports should work correctly
 from src.predictor import make_prediction
 from src.train import retrain_model
 
@@ -26,7 +30,7 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # ... (the rest of the code is the same as before)
+    # ... (same as before)
     image_bytes = None
 
     if 'file' in request.files:
@@ -56,7 +60,7 @@ def predict():
 
 @app.route('/retrain', methods=['POST'])
 def retrain():
-    # ... (the rest of the code is the same as before)
+    # ... (same as before)
     if 'zip_file' not in request.files:
         return jsonify({'error': 'No zip_file in request.files'}), 400
 
