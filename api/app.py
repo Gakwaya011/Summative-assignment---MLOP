@@ -1,4 +1,3 @@
-# Final, clean `api/app.py`
 import os
 import base64
 import shutil
@@ -9,14 +8,41 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import sys
 
-
 # Add the root directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '..'))
+sys.path.insert(0, project_root)
 
-
-# These imports should now work directly due to the `PYTHONPATH` set in render.yaml
-from src.predictor import make_prediction
-from src.train import retrain_model
+# Try different import approaches
+try:
+    from src.predictor import make_prediction
+    from src.train import retrain_model
+except ImportError as e:
+    print(f"Import error with src.module: {e}")
+    try:
+        # Alternative import if running from different directory
+        import sys
+        sys.path.append(os.path.join(project_root, 'src'))
+        from predictor import make_prediction
+        from train import retrain_model
+    except ImportError as e2:
+        print(f"Alternative import also failed: {e2}")
+        # Last resort - direct path import
+        import importlib.util
+        
+        # Load predictor
+        predictor_path = os.path.join(project_root, 'src', 'predictor.py')
+        spec = importlib.util.spec_from_file_location("predictor", predictor_path)
+        predictor_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(predictor_module)
+        make_prediction = predictor_module.make_prediction
+        
+        # Load train
+        train_path = os.path.join(project_root, 'src', 'train.py')
+        spec = importlib.util.spec_from_file_location("train", train_path)
+        train_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(train_module)
+        retrain_model = train_module.retrain_model
 
 app = Flask(__name__)
 CORS(app)
