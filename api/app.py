@@ -81,14 +81,61 @@ def clean_dataset_directory(directory):
             _, ext = os.path.splitext(file.lower())
             if ext not in valid_extensions:
                 print(f"Removing non-image file: {file}")
-                os.remove(file_path)
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
         
         # Remove empty directories
         for dir_name in dirs:
             dir_path = os.path.join(root, dir_name)
-            if not os.listdir(dir_path):
-                print(f"Removing empty directory: {dir_name}")
-                os.rmdir(dir_path)
+            try:
+                if not os.listdir(dir_path):
+                    print(f"Removing empty directory: {dir_name}")
+                    os.rmdir(dir_path)
+            except:
+                pass
+
+
+def validate_dataset_structure(directory):
+    """Validate dataset structure and return detailed info"""
+    try:
+        class_dirs = []
+        total_images = 0
+        
+        for item in os.listdir(directory):
+            item_path = os.path.join(directory, item)
+            if os.path.isdir(item_path):
+                # Count images in this directory
+                image_count = 0
+                valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+                
+                for file in os.listdir(item_path):
+                    _, ext = os.path.splitext(file.lower())
+                    if ext in valid_extensions:
+                        image_count += 1
+                
+                if image_count > 0:
+                    class_dirs.append({
+                        'name': item,
+                        'count': image_count
+                    })
+                    total_images += image_count
+        
+        return {
+            'valid': len(class_dirs) >= 2 and total_images >= 4,
+            'class_dirs': class_dirs,
+            'total_images': total_images,
+            'error': None
+        }
+    
+    except Exception as e:
+        return {
+            'valid': False,
+            'class_dirs': [],
+            'total_images': 0,
+            'error': str(e)
+        }
 
 
 @app.route("/")
@@ -99,7 +146,8 @@ def home():
         "version": "1.0",
         "endpoints": {
             "predict": "/predict (POST)",
-            "retrain": "/retrain (POST)"
+            "retrain": "/retrain (POST)",
+            "health": "/health (GET)"
         }
     }), 200
 
@@ -115,7 +163,7 @@ def health_check():
         return jsonify({
             "status": "healthy",
             "model_status": model_status,
-            "timestamp": tf.timestamp().numpy().item()
+            "model_exists": os.path.exists(MODEL_PATH)
         }), 200
     except Exception as e:
         return jsonify({
@@ -189,7 +237,8 @@ def predict():
 
         return jsonify({
             "predicted_class": predicted_class,
-            "confidence": float(confidence)
+            "confidence": float(confidence),
+            "raw_score": float(score)
         }), 200
 
     except Exception as e:
@@ -231,19 +280,30 @@ def retrain():
         # Clean the dataset - remove non-image files
         clean_dataset_directory(extract_path)
         
-        # Check if we have valid class directories
-        class_dirs = [d for d in os.listdir(extract_path) 
-                     if os.path.isdir(os.path.join(extract_path, d))]
+        # Validate dataset structure
+        validation_result = validate_dataset_structure(extract_path)
         
-        if len(class_dirs) < 2:
-            return jsonify({"error": "Dataset must contain at least 2 class directories (Cars, Motorcycles)"}), 400
+        if not validation_result['valid']:
+            error_msg = f"Invalid dataset structure. Found {len(validation_result['class_dirs'])} classes with {validation_result['total_images']} total images. Need at least 2 classes with minimum 2 images each."
+            if validation_result['error']:
+                error_msg += f" Error: {validation_result['error']}"
+            
+            print(f"Dataset validation failed: {error_msg}")
+            print(f"Classes found: {validation_result['class_dirs']}")
+            
+            return jsonify({
+                "error": error_msg,
+                "details": validation_result
+            }), 400
+        
+        print(f"✅ Dataset validation passed: {validation_result}")
         
     except zipfile.BadZipFile:
         print("⚠️ Invalid zip file")
         return jsonify({"error": "Invalid zip file"}), 400
     except Exception as e:
         print(f"⚠️ Error extracting zip: {e}")
-        return jsonify({"error": "Error extracting zip file"}), 500
+        return jsonify({"error": f"Error extracting zip file: {str(e)}"}), 500
     finally:
         if os.path.exists(zip_path):
             os.remove(zip_path)
@@ -271,6 +331,11 @@ def retrain():
                 batch_size=batch_size,
                 label_mode='binary'  # For binary classification
             )
+            
+            print(f"✅ Datasets created successfully")
+            print(f"Training batches: {len(train_ds)}")
+            print(f"Validation batches: {len(val_ds)}")
+            
         except Exception as dataset_error:
             print(f"Dataset creation error: {dataset_error}")
             return jsonify({"error": f"Invalid dataset format: {str(dataset_error)}"}), 400
@@ -301,6 +366,7 @@ def retrain():
             ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=2, verbose=1)
         ]
 
+        print("🚀 Starting training...")
         # Train with fewer epochs for memory
         history = new_model.fit(
             train_ds, 
@@ -310,6 +376,7 @@ def retrain():
             verbose=1
         )
 
+        print("📊 Evaluating model...")
         # Evaluation
         y_true, y_pred = [], []
         for images, labels in val_ds:
@@ -337,6 +404,7 @@ def retrain():
 
         return jsonify({
             "message": "✅ Retraining completed successfully.",
+            "dataset_info": validation_result,
             "metrics": {
                 "accuracy": float(history.history["val_accuracy"][-1]),
                 "loss": float(history.history["val_loss"][-1]),
@@ -353,7 +421,7 @@ def retrain():
             shutil.rmtree(extract_path)
         tf.keras.backend.clear_session()
         gc.collect()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Training failed: {str(e)}"}), 500
 
 
 if __name__ == '__main__':
