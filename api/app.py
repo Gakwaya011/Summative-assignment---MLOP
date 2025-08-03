@@ -1,3 +1,4 @@
+# Updated `api/app.py`
 import os
 import sys
 import base64
@@ -8,9 +9,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-# Add the project root to the system path to allow imports from src/
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(project_root)
+# The project root is one level up from the current directory ('api/')
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+sys.path.insert(0, project_root)
 
 # Import the refactored functions
 from src.predictor import make_prediction
@@ -25,6 +26,7 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    # ... (the rest of the code is the same as before)
     image_bytes = None
 
     if 'file' in request.files:
@@ -42,10 +44,8 @@ def predict():
         return jsonify({'error': "No image data provided. Expecting 'file' in form-data or 'image' in JSON."}), 400
 
     try:
-        # Pass the image bytes directly to the predictor
         predicted_class, confidence = make_prediction(image_bytes)
         
-        # Return a structured JSON response
         return jsonify({
             "predicted_class": predicted_class,
             "confidence": confidence
@@ -56,6 +56,7 @@ def predict():
 
 @app.route('/retrain', methods=['POST'])
 def retrain():
+    # ... (the rest of the code is the same as before)
     if 'zip_file' not in request.files:
         return jsonify({'error': 'No zip_file in request.files'}), 400
 
@@ -77,13 +78,8 @@ def retrain():
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
         
-        # Now, the data is in subdirectories of temp_dir
-        # We assume the structure is temp_dir/Cars and temp_dir/Motorcycles
-        # The retrain_model function will handle this structure
-        
         history = retrain_model(temp_dir)
         
-        # Extract the final metrics from the history object
         metrics = {
             'accuracy': history.history['accuracy'][-1],
             'val_accuracy': history.history['val_accuracy'][-1],
@@ -100,7 +96,6 @@ def retrain():
         return jsonify({'error': f'Retraining failed: {str(e)}'}), 500
 
     finally:
-        # Clean up the temporary directory
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 if __name__ == '__main__':
