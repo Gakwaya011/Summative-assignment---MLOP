@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import base64
+import os
 from io import BytesIO
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,6 +13,10 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded"
 )
+
+# Force matplotlib to use non-GUI backend for server deployment
+import matplotlib
+matplotlib.use('Agg')
 
 # --- Constants ---
 API_URL = "https://vehicle-classifier-api.onrender.com"
