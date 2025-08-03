@@ -24,16 +24,71 @@ CLASS_NAMES = ['Cars', 'Motorcycles']
 model = None  # Lazy-loaded global
 
 
+def create_initial_model():
+    """Create a basic model if no trained model exists"""
+    print("Creating initial model...")
+    initial_model = tf.keras.Sequential([
+        tf.keras.layers.Rescaling(1. / 255, input_shape=(224, 224, 3)),
+        tf.keras.layers.Conv2D(16, 3, activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Conv2D(32, 3, activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Conv2D(64, 3, activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+    
+    initial_model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    
+    # Create dummy data to initialize the model
+    dummy_data = tf.random.normal((1, 224, 224, 3))
+    initial_model.predict(dummy_data)
+    
+    initial_model.save(MODEL_PATH)
+    print("Initial model created and saved.")
+    return initial_model
+
+
 def load_current_model():
     global model
     if model is None:
         print("Loading model into memory...")
-        model = load_model(MODEL_PATH)
-        print("Model loaded successfully for prediction.")
+        try:
+            if os.path.exists(MODEL_PATH):
+                model = load_model(MODEL_PATH)
+                print("Model loaded successfully for prediction.")
+            else:
+                print("No existing model found, creating initial model...")
+                model = create_initial_model()
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            print("Creating new model...")
+            model = create_initial_model()
     return model
 
 
-@app.route("/", methods=["GET", "HEAD"])
+def clean_dataset_directory(directory):
+    """Remove non-image files and empty folders from dataset directory"""
+    valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    
+    for root, dirs, files in os.walk(directory, topdown=False):
+        # Remove non-image files
+        for file in files:
+            file_path = os.path.join(root, file)
+            _, ext = os.path.splitext(file.lower())
+            if ext not in valid_extensions:
+                print(f"Removing non-image file: {file}")
+                os.remove(file_path)
+        
+        # Remove empty directories
+        for dir_name in dirs:
+            dir_path = os.path.join(root, dir_name)
+            if not os.listdir(dir_path):
+                print(f"Removing empty directory: {dir_name}")
+                os.rmdir(dir_path)
 def home():
     return "✅ MLOps API is running!", 200
 
@@ -142,6 +197,16 @@ def retrain():
             zip_ref.extractall(extract_path)
         print(f"✅ Extracted zip to: {extract_path}")
         
+        # Clean the dataset - remove non-image files
+        clean_dataset_directory(extract_path)
+        
+        # Check if we have valid class directories
+        class_dirs = [d for d in os.listdir(extract_path) 
+                     if os.path.isdir(os.path.join(extract_path, d))]
+        
+        if len(class_dirs) < 2:
+            return jsonify({"error": "Dataset must contain at least 2 class directories (Cars, Motorcycles)"}), 400
+        
     except zipfile.BadZipFile:
         print("⚠️ Invalid zip file")
         return jsonify({"error": "Invalid zip file"}), 400
@@ -153,16 +218,31 @@ def retrain():
             os.remove(zip_path)
 
     try:
-        # Create datasets
+        # Create datasets with error handling
         batch_size = 16  # Reduced for memory
-        train_ds = image_dataset_from_directory(
-            extract_path, validation_split=0.2, subset="training",
-            seed=123, image_size=IMG_SIZE, batch_size=batch_size
-        )
-        val_ds = image_dataset_from_directory(
-            extract_path, validation_split=0.2, subset="validation",
-            seed=123, image_size=IMG_SIZE, batch_size=batch_size
-        )
+        
+        try:
+            train_ds = image_dataset_from_directory(
+                extract_path, 
+                validation_split=0.2, 
+                subset="training",
+                seed=123, 
+                image_size=IMG_SIZE, 
+                batch_size=batch_size,
+                label_mode='binary'  # For binary classification
+            )
+            val_ds = image_dataset_from_directory(
+                extract_path, 
+                validation_split=0.2, 
+                subset="validation",
+                seed=123, 
+                image_size=IMG_SIZE, 
+                batch_size=batch_size,
+                label_mode='binary'  # For binary classification
+            )
+        except Exception as dataset_error:
+            print(f"Dataset creation error: {dataset_error}")
+            return jsonify({"error": f"Invalid dataset format: {str(dataset_error)}"}), 400
 
         AUTOTUNE = tf.data.AUTOTUNE
         train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
