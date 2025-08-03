@@ -89,8 +89,39 @@ def clean_dataset_directory(directory):
             if not os.listdir(dir_path):
                 print(f"Removing empty directory: {dir_name}")
                 os.rmdir(dir_path)
+
+
+@app.route("/")
 def home():
-    return "✅ MLOps API is running!", 200
+    return jsonify({
+        "status": "healthy",
+        "service": "Vehicle Classifier API",
+        "version": "1.0",
+        "endpoints": {
+            "predict": "/predict (POST)",
+            "retrain": "/retrain (POST)"
+        }
+    }), 200
+
+
+@app.route("/health")
+def health_check():
+    """Additional health check endpoint"""
+    try:
+        # Test if model can be loaded
+        current_model = load_current_model()
+        model_status = "loaded" if current_model else "error"
+        
+        return jsonify({
+            "status": "healthy",
+            "model_status": model_status,
+            "timestamp": tf.timestamp().numpy().item()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
 
 
 @app.route("/predict", methods=["POST"])
