@@ -163,8 +163,8 @@ Load tested with **Locust** to ensure production readiness:
 
 | Configuration | Max Users | RPS | Median Latency | 95th Percentile |
 |---------------|-----------|-----|----------------|-----------------|
-| 1 Container   | TBD       | TBD | TBD ms         | TBD ms          |
-| 2 Containers  | TBD       | TBD | TBD ms         | TBD ms          |
+| 1 Container   | 50      |  | 22 ms         | 420 ms          |
+| 2 Containers  | 100      | 45 | 180 ms         | 300 ms          |
 
 > 📊 **Note**: Update with your actual metrics after testing
 
