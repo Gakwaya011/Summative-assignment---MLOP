@@ -1,127 +1,148 @@
 import os
-import sys
-import base64
-import shutil
 import zipfile
-from io import BytesIO
+import shutil
+import numpy as np
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 from werkzeug.utils import secure_filename
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.utils import image_dataset_from_directory
+from sklearn.metrics import precision_score, recall_score, roc_auc_score
+import tensorflow as tf
 
-# --- Setup Import Path ---
-current_script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_script_dir, '..'))
-src_dir = os.path.join(project_root, 'src')
-
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-
-from train import train_model_from_dir
-from predictor import make_prediction
-
-# --- Flask Setup ---
 app = Flask(__name__)
-CORS(app)
+MODEL_PATH = "vehicle_classifier_model.keras"
+IMG_SIZE = (224, 224)
+CLASS_NAMES = ['Cars', 'Motorcycles']
+model = None  # global model variable
 
-# --- Directory Setup ---
-UPLOAD_FOLDER = os.path.join(project_root, 'uploads')
-RETRAINING_DATA_DIR = os.path.join(project_root, 'retraining_data')
-ORIGINAL_TRAIN_DATA_DIR = os.path.join(project_root, 'data', 'train')
-COMBINED_DATA_DIR = os.path.join(project_root, 'combined_data_for_retraining')
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(RETRAINING_DATA_DIR, exist_ok=True)
+def load_current_model():
+    global model
+    if model is None:
+        model = load_model(MODEL_PATH)
+    return model
 
-# --- Health Check ---
-@app.route('/', methods=['GET'])
-def home():
-    return "✅ MLOps API is running!", 200
 
-# --- Prediction Endpoint ---
-@app.route('/predict', methods=['POST'])
-def predict_endpoint():
-    try:
-        data = request.get_json()
-        if not data or 'image' not in data:
-            return jsonify({"error": "No image data provided"}), 400
+@app.route("/predict", methods=["POST"])
+def predict():
+    if "file" not in request.files:
+        return jsonify({"error": "No file part"}), 400
 
-        image_bytes = base64.b64decode(data['image'])
-        image_file = BytesIO(image_bytes)
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
 
-        predicted_class, confidence = make_prediction(image_file)
+    img_path = os.path.join("temp", secure_filename(file.filename))
+    os.makedirs("temp", exist_ok=True)
+    file.save(img_path)
 
-        return jsonify({
-            "predicted_class": predicted_class,
-            "confidence": float(confidence)
-        }), 200
+    img = image.load_img(img_path, target_size=IMG_SIZE)
+    img_array = image.img_to_array(img)
+    img_array = tf.expand_dims(img_array, 0) / 255.0
 
-    except Exception as e:
-        print(f"[❌ Prediction error] {e}")
-        return jsonify({"error": str(e)}), 500
+    model = load_current_model()
+    predictions = model.predict(img_array)
+    predicted_class = CLASS_NAMES[int(predictions[0][0] > 0.5)]
+    confidence = float(predictions[0][0]) if predicted_class == "Motorcycles" else float(1 - predictions[0][0])
 
-# --- Retraining Endpoint ---
-@app.route('/retrain', methods=['POST'])
+    os.remove(img_path)
+
+    return jsonify({"class": predicted_class, "confidence": round(confidence, 4)})
+
+
+@app.route("/retrain", methods=["POST"])
 def retrain():
-    if 'zip_file' not in request.files:
-        return jsonify({'error': 'No zip file uploaded'}), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No zip file provided"}), 400
 
-    zip_file = request.files['zip_file']
-    if zip_file.filename == '':
-        return jsonify({'error': 'Empty filename'}), 400
+    zip_file = request.files["file"]
+    zip_path = os.path.join("temp", secure_filename(zip_file.filename))
+    os.makedirs("temp", exist_ok=True)
+    zip_file.save(zip_path)
 
-    temp_zip_path = os.path.join(UPLOAD_FOLDER, secure_filename(zip_file.filename))
-    zip_file.save(temp_zip_path)
+    extract_path = "temp/extracted_data"
+    if os.path.exists(extract_path):
+        shutil.rmtree(extract_path)
+    os.makedirs(extract_path)
 
-    try:
-        # Unzip new data
-        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(RETRAINING_DATA_DIR)
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_path)
 
-        # Clean and merge data
-        if os.path.exists(COMBINED_DATA_DIR):
-            shutil.rmtree(COMBINED_DATA_DIR)
-        shutil.copytree(ORIGINAL_TRAIN_DATA_DIR, COMBINED_DATA_DIR)
+    os.remove(zip_path)
 
-        # Dynamically merge 'Cars' and 'Motorcycles' from retraining data
-        for class_name in ['Cars', 'Motorcycles']:
-            found = False
-            for root, dirs, _ in os.walk(RETRAINING_DATA_DIR):
-                if class_name in dirs:
-                    source_dir = os.path.join(root, class_name)
-                    target_dir = os.path.join(COMBINED_DATA_DIR, class_name)
-                    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
-                    found = True
-                    break
-            if not found:
-                print(f"⚠️ Folder '{class_name}' not found in ZIP")
+    batch_size = 32
+    train_ds = image_dataset_from_directory(
+        extract_path,
+        validation_split=0.2,
+        subset="training",
+        seed=123,
+        image_size=IMG_SIZE,
+        batch_size=batch_size,
+    )
+    val_ds = image_dataset_from_directory(
+        extract_path,
+        validation_split=0.2,
+        subset="validation",
+        seed=123,
+        image_size=IMG_SIZE,
+        batch_size=batch_size,
+    )
 
-        print(f"✅ Starting retraining from: {COMBINED_DATA_DIR}")
-        print(f"Classes in combined data: {os.listdir(COMBINED_DATA_DIR)}")
+    AUTOTUNE = tf.data.AUTOTUNE
+    train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
+    val_ds = val_ds.prefetch(buffer_size=AUTOTUNE)
 
-        history = train_model_from_dir(COMBINED_DATA_DIR)
+    new_model = tf.keras.Sequential([
+        tf.keras.layers.Rescaling(1. / 255, input_shape=(224, 224, 3)),
+        tf.keras.layers.Conv2D(32, 3, activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Conv2D(64, 3, activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Conv2D(128, 3, activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
 
-        metrics = {
-            'loss': history.history['loss'][-1],
-            'accuracy': history.history['accuracy'][-1],
-            'precision': history.history.get('precision', [None])[-1],
-            'recall': history.history.get('recall', [None])[-1],
-            'roc_auc': history.history.get('roc_auc', [None])[-1]
-        }
+    new_model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
 
-        # Clean up
-        os.remove(temp_zip_path)
-        shutil.rmtree(RETRAINING_DATA_DIR)
+    callbacks = [
+        EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True),
+        ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=2, verbose=1)
+    ]
 
-        return jsonify({
-            'message': '✅ Retraining completed successfully.',
-            'metrics': {k: v for k, v in metrics.items() if v is not None}
-        }), 200
+    history = new_model.fit(train_ds, validation_data=val_ds, epochs=10, callbacks=callbacks)
 
-    except Exception as e:
-        print(f"[❌ Retraining error] {e}")
-        return jsonify({'error': str(e)}), 500
+    # Evaluation
+    y_true = []
+    y_pred = []
+    for images, labels in val_ds:
+        preds = new_model.predict(images)
+        y_true.extend(labels.numpy())
+        y_pred.extend(preds.flatten())
 
-# --- Run the App ---
-if __name__ == '__main__':
-    app.run(debug=True)
+    y_pred_binary = [1 if p > 0.5 else 0 for p in y_pred]
+    precision = precision_score(y_true, y_pred_binary)
+    recall = recall_score(y_true, y_pred_binary)
+    roc_auc = roc_auc_score(y_true, y_pred)
+
+    # Save and reload the model
+    new_model.save(MODEL_PATH)
+
+    # Reload into memory
+    global model
+    model = load_model(MODEL_PATH)
+
+    shutil.rmtree(extract_path)
+
+    return jsonify({
+        "message": "Retraining completed successfully.",
+        "accuracy": float(history.history["val_accuracy"][-1]),
+        "loss": float(history.history["val_loss"][-1]),
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "roc_auc": round(roc_auc, 4),
+    })

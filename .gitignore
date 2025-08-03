@@ -1,0 +1,5 @@
+__pycache__/
+uploads/
+models/*.h5
+models/*.keras
+.env
