@@ -14,7 +14,7 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run ui.py
+    startCommand: streamlit run streamlit_app/streamlit_app.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.13
