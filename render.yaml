@@ -7,7 +7,7 @@ services:
     startCommand: gunicorn app.app:app
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10
+        value: 3.10.13
 
   - type: web
     name: vehicle-classifier-ui
@@ -17,4 +17,4 @@ services:
     startCommand: streamlit run ui.py
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10
+        value: 3.10.13
