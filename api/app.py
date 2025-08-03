@@ -70,9 +70,40 @@ def load_current_model():
     return model
 
 
+def analyze_directory_structure(directory, max_depth=3):
+    """Recursively analyze directory structure for debugging"""
+    structure = {"name": os.path.basename(directory), "type": "directory", "children": []}
+    
+    if max_depth <= 0:
+        return structure
+    
+    try:
+        for item in os.listdir(directory):
+            item_path = os.path.join(directory, item)
+            if os.path.isdir(item_path):
+                child_structure = analyze_directory_structure(item_path, max_depth - 1)
+                structure["children"].append(child_structure)
+            else:
+                file_info = {
+                    "name": item,
+                    "type": "file",
+                    "size": os.path.getsize(item_path),
+                    "extension": os.path.splitext(item)[1].lower()
+                }
+                structure["children"].append(file_info)
+    except PermissionError:
+        structure["error"] = "Permission denied"
+    except Exception as e:
+        structure["error"] = str(e)
+    
+    return structure
+
+
 def clean_dataset_directory(directory):
     """Remove non-image files and empty folders from dataset directory"""
     valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    removed_files = []
+    removed_dirs = []
     
     for root, dirs, files in os.walk(directory, topdown=False):
         # Remove non-image files
@@ -81,10 +112,11 @@ def clean_dataset_directory(directory):
             _, ext = os.path.splitext(file.lower())
             if ext not in valid_extensions:
                 print(f"Removing non-image file: {file}")
+                removed_files.append(file)
                 try:
                     os.remove(file_path)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Error removing {file}: {e}")
         
         # Remove empty directories
         for dir_name in dirs:
@@ -92,41 +124,107 @@ def clean_dataset_directory(directory):
             try:
                 if not os.listdir(dir_path):
                     print(f"Removing empty directory: {dir_name}")
+                    removed_dirs.append(dir_name)
                     os.rmdir(dir_path)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error removing directory {dir_name}: {e}")
+    
+    return {"removed_files": removed_files, "removed_dirs": removed_dirs}
+
+
+def find_dataset_root(extract_path):
+    """Find the actual dataset root directory that contains class folders"""
+    valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    
+    def has_images(directory):
+        """Check if directory contains image files"""
+        try:
+            for file in os.listdir(directory):
+                _, ext = os.path.splitext(file.lower())
+                if ext in valid_extensions:
+                    return True
+        except:
+            pass
+        return False
+    
+    def find_class_dirs(directory):
+        """Find directories that contain images (potential class directories)"""
+        class_dirs = []
+        try:
+            for item in os.listdir(directory):
+                item_path = os.path.join(directory, item)
+                if os.path.isdir(item_path) and has_images(item_path):
+                    class_dirs.append(item)
+        except:
+            pass
+        return class_dirs
+    
+    # Check if extract_path itself has class directories
+    class_dirs = find_class_dirs(extract_path)
+    if len(class_dirs) >= 2:
+        return extract_path, class_dirs
+    
+    # If not, look one level deeper
+    try:
+        for item in os.listdir(extract_path):
+            item_path = os.path.join(extract_path, item)
+            if os.path.isdir(item_path):
+                class_dirs = find_class_dirs(item_path)
+                if len(class_dirs) >= 2:
+                    return item_path, class_dirs
+    except:
+        pass
+    
+    return None, []
 
 
 def validate_dataset_structure(directory):
     """Validate dataset structure and return detailed info"""
     try:
+        # First, analyze the full structure for debugging
+        structure = analyze_directory_structure(directory)
+        
+        # Try to find the actual dataset root
+        dataset_root, potential_classes = find_dataset_root(directory)
+        
+        if dataset_root is None:
+            return {
+                'valid': False,
+                'class_dirs': [],
+                'total_images': 0,
+                'error': 'No valid dataset structure found',
+                'structure': structure,
+                'dataset_root': None
+            }
+        
+        # Validate the found dataset
         class_dirs = []
         total_images = 0
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
         
-        for item in os.listdir(directory):
-            item_path = os.path.join(directory, item)
-            if os.path.isdir(item_path):
-                # Count images in this directory
-                image_count = 0
-                valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
-                
-                for file in os.listdir(item_path):
-                    _, ext = os.path.splitext(file.lower())
-                    if ext in valid_extensions:
-                        image_count += 1
-                
-                if image_count > 0:
-                    class_dirs.append({
-                        'name': item,
-                        'count': image_count
-                    })
-                    total_images += image_count
+        for class_name in potential_classes:
+            class_path = os.path.join(dataset_root, class_name)
+            image_count = 0
+            
+            for file in os.listdir(class_path):
+                _, ext = os.path.splitext(file.lower())
+                if ext in valid_extensions:
+                    image_count += 1
+            
+            if image_count > 0:
+                class_dirs.append({
+                    'name': class_name,
+                    'count': image_count
+                })
+                total_images += image_count
         
         return {
             'valid': len(class_dirs) >= 2 and total_images >= 4,
             'class_dirs': class_dirs,
             'total_images': total_images,
-            'error': None
+            'error': None,
+            'structure': structure,
+            'dataset_root': dataset_root
         }
     
     except Exception as e:
@@ -134,7 +232,9 @@ def validate_dataset_structure(directory):
             'valid': False,
             'class_dirs': [],
             'total_images': 0,
-            'error': str(e)
+            'error': str(e),
+            'structure': None,
+            'dataset_root': None
         }
 
 
@@ -143,7 +243,7 @@ def home():
     return jsonify({
         "status": "healthy",
         "service": "Vehicle Classifier API",
-        "version": "1.0",
+        "version": "1.1",
         "endpoints": {
             "predict": "/predict (POST)",
             "retrain": "/retrain (POST)",
@@ -277,11 +377,18 @@ def retrain():
             zip_ref.extractall(extract_path)
         print(f"✅ Extracted zip to: {extract_path}")
         
+        # Analyze structure before cleaning
+        print("📁 Directory structure before cleaning:")
+        initial_structure = analyze_directory_structure(extract_path)
+        print(f"Initial structure: {initial_structure}")
+        
         # Clean the dataset - remove non-image files
-        clean_dataset_directory(extract_path)
+        cleanup_result = clean_dataset_directory(extract_path)
+        print(f"🧹 Cleanup result: {cleanup_result}")
         
         # Validate dataset structure
         validation_result = validate_dataset_structure(extract_path)
+        print(f"🔍 Validation result: {validation_result}")
         
         if not validation_result['valid']:
             error_msg = f"Invalid dataset structure. Found {len(validation_result['class_dirs'])} classes with {validation_result['total_images']} total images. Need at least 2 classes with minimum 2 images each."
@@ -293,10 +400,14 @@ def retrain():
             
             return jsonify({
                 "error": error_msg,
-                "details": validation_result
+                "details": validation_result,
+                "cleanup": cleanup_result
             }), 400
         
         print(f"✅ Dataset validation passed: {validation_result}")
+        
+        # Use the correct dataset root
+        dataset_root = validation_result['dataset_root']
         
     except zipfile.BadZipFile:
         print("⚠️ Invalid zip file")
@@ -314,7 +425,7 @@ def retrain():
         
         try:
             train_ds = image_dataset_from_directory(
-                extract_path, 
+                dataset_root,  # Use the correct root directory
                 validation_split=0.2, 
                 subset="training",
                 seed=123, 
@@ -323,7 +434,7 @@ def retrain():
                 label_mode='binary'  # For binary classification
             )
             val_ds = image_dataset_from_directory(
-                extract_path, 
+                dataset_root,  # Use the correct root directory
                 validation_split=0.2, 
                 subset="validation",
                 seed=123, 
@@ -405,6 +516,7 @@ def retrain():
         return jsonify({
             "message": "✅ Retraining completed successfully.",
             "dataset_info": validation_result,
+            "cleanup": cleanup_result,
             "metrics": {
                 "accuracy": float(history.history["val_accuracy"][-1]),
                 "loss": float(history.history["val_loss"][-1]),
