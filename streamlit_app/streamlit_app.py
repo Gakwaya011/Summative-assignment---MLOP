@@ -5,11 +5,6 @@ import os
 from io import BytesIO
 import pandas as pd
 import matplotlib.pyplot as plt
-import streamlit as st
-import psutil
-st.sidebar.write("Memory usage:", psutil.virtual_memory().percent, "%")
-st.write("Current config:", st.config.get_option("server.port"))
-st.write(f"Running on port: {os.environ.get('PORT', 'default')}")
 
 # --- App Configuration ---
 st.set_page_config(
@@ -36,14 +31,10 @@ def get_prediction(image_bytes):
     try:
         base64_encoded_image = base64.b64encode(image_bytes).decode('utf-8')
         payload = {"image": base64_encoded_image}
-        # Increased timeout to 90 seconds for slow server processing
-        response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=90)
+        response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=30)
         response.raise_for_status()
         result = response.json()
         return result.get("predicted_class"), result.get("confidence")
-    except requests.exceptions.Timeout:
-        st.error("🕒 Prediction timed out - server may be overloaded. Please try again.")
-        return None, None
     except requests.exceptions.RequestException as e:
         st.error(f"API request failed: {e}")
         return None, None
@@ -97,7 +88,7 @@ with st.sidebar:
 st.header("🔍 Predict a Vehicle")
 uploaded_file_predict = st.file_uploader(
     "Choose a vehicle image...", 
-    type=["jpg", "jpeg", "png", "webp"],
+    type=["jpg", "jpeg", "png"],
     key="predict_uploader"
 )
 
@@ -105,7 +96,7 @@ if uploaded_file_predict:
     st.image(uploaded_file_predict, caption='Uploaded Image', use_column_width=True)
     
     if st.button("🎯 Make Prediction", type="primary"):
-        with st.spinner("Making prediction... This may take up to 90 seconds on free tier servers."):
+        with st.spinner("Making prediction..."):
             # Reset file pointer and read bytes
             uploaded_file_predict.seek(0)
             image_bytes = uploaded_file_predict.read()
@@ -229,4 +220,3 @@ st.markdown("**💡 Tips:**")
 st.markdown("- Use clear, well-lit images for better predictions")
 st.markdown("- Ensure zip files contain proper folder structure for retraining")
 st.markdown("- Training time depends on data size and server load")
-st.markdown("- **WEBP images are now supported!** 🎉")

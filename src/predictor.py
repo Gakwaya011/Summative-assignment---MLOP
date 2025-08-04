@@ -1,155 +1,222 @@
 import os
 import numpy as np
 import logging
-from PIL import Image
-import io
-import traceback
-import time
-from functools import lru_cache
-# Add this at the VERY TOP of predictor.py
-import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TF logs
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Try to import TensorFlow with error handling
 try:
     import tensorflow as tf
     from tensorflow import keras
     TF_AVAILABLE = True
-except ImportError:
+    logger.info("TensorFlow imported successfully")
+except ImportError as e:
+    logger.error(f"TensorFlow import failed: {e}")
     TF_AVAILABLE = False
-    tf = None  # Critical fallback
 
-# ========== CONFIGURATION ==========
-# Disable GPU (Critical for Render's free tier)
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-# Configure logging - reduced to WARNING for production
-logging.basicConfig(level=logging.WARNING)
-logger = logging.getLogger(__name__)
+# Try to import PIL with error handling
+try:
+    from PIL import Image
+    import io
+    PIL_AVAILABLE = True
+    logger.info("PIL imported successfully")
+except ImportError as e:
+    logger.error(f"PIL import failed: {e}")
+    PIL_AVAILABLE = False
 
 # Constants
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 MODEL_PATH = os.path.join(PROJECT_ROOT, 'models', 'vehicle_classifier_model.keras')
 IMG_HEIGHT, IMG_WIDTH = 128, 128
-MAX_PREDICTION_TIME = 10  # seconds
 
-# ========== MODEL MANAGEMENT ==========
-class ModelManager:
-    _instance = None
-    class_names = ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'unknown']
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance.model = None
-            cls._instance.last_load_time = 0
-        return cls._instance
-    
-    def load_model(self):
-        """Load model with memory optimization"""
-        try:
-            # Clear previous session to free memory
-            tf.keras.backend.clear_session()
-            
-            # Load with custom options for efficiency
-            self.model = tf.keras.models.load_model(
-                MODEL_PATH,
-                compile=False  # Faster loading if not retraining
-            )
-            logger.warning("Model loaded successfully")
-            return True
-        except Exception as e:
-            logger.error(f"Model load failed: {str(e)}")
-            self.model = self._create_dummy_model()
-            return self.model is not None
-    
-    def _create_dummy_model(self):
-        """Lightweight fallback model"""
-        try:
-            model = tf.keras.Sequential([
-                tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
-                tf.keras.layers.GlobalAveragePooling2D(),
-                tf.keras.layers.Dense(len(self.class_names) - 1, activation='softmax')
-            ])
-            logger.warning("Created dummy model")
-            return model
-        except Exception as e:
-            logger.error(f"Dummy model failed: {str(e)}")
-            return None
+# Global variables
+model = None
+class_names = ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'unknown']
 
-# ========== IMAGE PROCESSING ==========
-@lru_cache(maxsize=1)
-def get_image_processor():
-    """Cache image processor to save memory"""
-    return tf.keras.preprocessing.image.ImageDataGenerator(rescale=1./255)
-
-def preprocess_image(image_bytes):
-    """Optimized image preprocessing with timeout"""
-    start_time = time.time()
+def create_dummy_model():
+    """Create a simple dummy model for testing."""
+    if not TF_AVAILABLE:
+        return None
     
     try:
-        # Fast validation
-        if len(image_bytes) < 1024:  # Minimum reasonable image size
-            raise ValueError("Image too small")
-        
-        # Convert bytes to PIL with size check
-        img = Image.open(io.BytesIO(image_bytes))
-        if img.size[0] * img.size[1] > 3000*3000:  # Prevent giant images
-            img = img.resize((3000, 3000))
-        
-        # Convert and resize
-        img = img.convert('RGB').resize((IMG_WIDTH, IMG_HEIGHT))
-        img_array = np.array(img) / 255.0
-        
-        # Timeout check
-        if (time.time() - start_time) > MAX_PREDICTION_TIME/2:
-            raise TimeoutError("Preprocessing too slow")
-            
-        return np.expand_dims(img_array, axis=0)
-        
+        dummy_model = keras.Sequential([
+            keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
+            keras.layers.GlobalAveragePooling2D(),
+            keras.layers.Dense(1, activation='sigmoid')
+        ])
+        dummy_model.compile(optimizer='adam', loss='binary_crossentropy')
+        logger.info("Created dummy model")
+        return dummy_model
     except Exception as e:
-        logger.error(f"Preprocessing failed: {str(e)}")
+        logger.error(f"Error creating dummy model: {e}")
         return None
 
-# ========== PREDICTION LOGIC ==========
-def predict_with_timeout(image_bytes):
-    """Main prediction with strict timeout"""
-    model_mgr = ModelManager()
+def load_model():
+    """Load the trained model with comprehensive error handling."""
+    global model
     
-    # Validate input first
-    if not isinstance(image_bytes, (bytes, bytearray)):
-        return "invalid_input", 0.0
+    if not TF_AVAILABLE:
+        logger.error("TensorFlow not available, cannot load model")
+        return False
     
-    # Get model (load if needed)
-    if model_mgr.model is None and not model_mgr.load_model():
-        return "model_unavailable", 0.0
-    
-    # Preprocess with timeout
-    start_time = time.time()
-    processed_img = preprocess_image(image_bytes)
-    if processed_img is None:
-        return "preprocessing_failed", 0.0
-    
-    # Prediction with timeout check
     try:
-        if (time.time() - start_time) > MAX_PREDICTION_TIME * 0.8:
-            raise TimeoutError("Prediction would exceed timeout")
-            
-        predictions = model_mgr.model.predict(
-            processed_img,
-            batch_size=1,  # Smallest possible batch
-            verbose=0       # Disable progress prints
-        )
+        if os.path.exists(MODEL_PATH):
+            model = keras.models.load_model(MODEL_PATH)
+            logger.info("Model loaded successfully for prediction.")
+            return True
+        else:
+            logger.warning(f"Model not found at {MODEL_PATH}, creating dummy model")
+            model = create_dummy_model()
+            return model is not None
+    except Exception as e:
+        logger.error(f"Error loading model: {e}")
+        model = create_dummy_model()
+        return model is not None
+
+def simple_preprocess_image(image_bytes):
+    """
+    Simple image preprocessing that's less likely to fail.
+    
+    Args:
+        image_bytes (bytes): Raw image bytes
         
-        # Process results
-        pred_idx = np.argmax(predictions[0])
-        confidence = float(predictions[0][pred_idx])
-        return model_mgr.class_names[pred_idx], round(confidence, 4)
+    Returns:
+        np.ndarray or None: Preprocessed image array
+    """
+    if not PIL_AVAILABLE:
+        logger.error("PIL not available for image processing")
+        return None
+    
+    try:
+        # Basic validation
+        if not image_bytes or len(image_bytes) < 50:
+            raise ValueError("Invalid image data")
+        
+        # Remove any null bytes that might cause issues
+        clean_bytes = image_bytes.replace(b'\x00', b'')
+        
+        # Convert bytes to PIL Image
+        image = Image.open(io.BytesIO(clean_bytes))
+        
+        # Optional format check (JPEG/PNG)
+        if image.format not in ["JPEG", "PNG"]:
+            raise ValueError(f"Unsupported image format: {image.format}")
+        
+        # Convert to RGB
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Resize image
+        image = image.resize((IMG_WIDTH, IMG_HEIGHT), Image.Resampling.LANCZOS)
+        
+        # Convert to numpy array
+        image_array = np.array(image)
+        
+        # Validate array shape
+        if image_array.shape != (IMG_HEIGHT, IMG_WIDTH, 3):
+            raise ValueError(f"Unexpected image shape: {image_array.shape}")
+        
+        # Normalize pixel values
+        image_array = image_array.astype(np.float32) / 255.0
+        
+        # Add batch dimension
+        image_array = np.expand_dims(image_array, axis=0)
+        
+        logger.info(f"Image preprocessed successfully: shape {image_array.shape}")
+        return image_array
         
     except Exception as e:
-        logger.error(f"Prediction failed: {str(e)}")
-        return "prediction_error", 0.0
+        logger.error(f"Error preprocessing image: {e}")
+        
+        # Dump image bytes for debugging
+        try:
+            debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.jpg")
+            with open(debug_path, "wb") as f:
+                f.write(image_bytes)
+            logger.info(f"Saved invalid image bytes to {debug_path} for inspection.")
+        except Exception as dump_error:
+            logger.error(f"Failed to save debug image: {dump_error}")
+        
+        return None
 
-# Initialize on import
-model_manager = ModelManager()
-model_manager.load_model()
+def make_prediction(image_bytes):
+    """
+    Make a prediction with extensive error handling.
+    
+    Args:
+        image_bytes (bytes): Raw image bytes
+        
+    Returns:
+        tuple: (predicted_class, confidence)
+    """
+    global model
+    
+    try:
+        # Load model if not already loaded
+        if model is None:
+            if not load_model():
+                logger.error("Could not load model")
+                return "error_no_model", 0.0
+        
+        # Basic input validation
+        if not image_bytes:
+            logger.error("No image bytes provided")
+            return "error_no_data", 0.0
+        
+        if not isinstance(image_bytes, bytes):
+            logger.error(f"Invalid image_bytes type: {type(image_bytes)}")
+            return "error_invalid_type", 0.0
+        
+        logger.info(f"Processing image with {len(image_bytes)} bytes")
+        
+        # Preprocess image
+        processed_image = simple_preprocess_image(image_bytes)
+        if processed_image is None:
+            logger.error("Image preprocessing failed")
+            return "error_preprocessing", 0.0
+        
+        # Make prediction
+        if not TF_AVAILABLE or model is None:
+            logger.warning("Model not available, returning random prediction")
+            return "unknown", 0.5
+        
+        try:
+            predictions = model.predict(processed_image, verbose=0)
+            logger.info(f"Model prediction successful, shape: {predictions.shape}")
+            
+            # Handle different prediction formats
+            if len(predictions.shape) == 2:
+                if predictions.shape[1] > 1:
+                    # Multi-class classification
+                    predicted_index = np.argmax(predictions[0])
+                    confidence = float(predictions[0][predicted_index])
+                    predicted_class = class_names[min(predicted_index, len(class_names) - 1)]
+                else:
+                    # Binary classification
+                    confidence = float(predictions[0][0])
+                    predicted_class = class_names[0] if confidence > 0.5 else "background"
+            else:
+                # Single prediction
+                confidence = float(predictions[0])
+                predicted_class = class_names[0] if confidence > 0.5 else "background"
+            
+            # Ensure valid confidence range
+            confidence = max(0.0, min(1.0, confidence))
+            
+            logger.info(f"Prediction: {predicted_class}, Confidence: {confidence:.4f}")
+            return str(predicted_class), float(confidence)
+            
+        except Exception as pred_error:
+            logger.error(f"Model prediction error: {pred_error}")
+            return "error_prediction", 0.0
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in make_prediction: {e}")
+        return "error_unexpected", 0.0
+
+# Initialize model when module is imported
+try:
+    load_model()
+except Exception as e:
+    logger.error(f"Error during module initialization: {e}")
