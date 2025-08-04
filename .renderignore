@@ -1,0 +1,10 @@
+# Ignore large data during deployment
+data/
+uploads/
+combined_data_for_retraining/
+notebook/
+__pycache__/# optional, unless needed at deploy time
+*.zip
+*.jpg
+*.jpeg
+*.png
