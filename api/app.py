@@ -178,6 +178,7 @@ def retrain():
     except Exception as e:
         clean_temp_dir()
         return jsonify({'error': str(e)}), 500
+    
 
 # ========== STARTUP ==========
 if __name__ == '__main__':

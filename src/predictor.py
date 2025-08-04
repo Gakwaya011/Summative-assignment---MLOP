@@ -6,6 +6,18 @@ import io
 import traceback
 import time
 from functools import lru_cache
+# Add this at the VERY TOP of predictor.py
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TF logs
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
+
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    tf = None  # Critical fallback
 
 # ========== CONFIGURATION ==========
 # Disable GPU (Critical for Render's free tier)
