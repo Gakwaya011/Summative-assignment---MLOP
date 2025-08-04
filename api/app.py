@@ -4,7 +4,8 @@ import shutil
 import zipfile
 import traceback
 import logging
-import signal
+import threading
+import time
 from io import BytesIO
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -76,32 +77,30 @@ load_modules()
 app = Flask(__name__)
 CORS(app)
 
-class TimeoutException(Exception):
-    pass
-
-def timeout_handler(signum, frame):
-    raise TimeoutException("Operation timed out")
-
-def run_with_timeout(func, args, timeout_seconds=25):
-    """Run a function with a timeout."""
-    try:
-        # Set up the timeout
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout_seconds)
-        
-        # Run the function
-        result = func(*args)
-        
-        # Cancel the timeout
-        signal.alarm(0)
-        return result
-        
-    except TimeoutException:
+def run_with_timeout(func, args, timeout_seconds=80):
+    """Run a function with a timeout using threading."""
+    result = [None]
+    exception = [None]
+    
+    def target():
+        try:
+            result[0] = func(*args)
+        except Exception as e:
+            exception[0] = e
+    
+    thread = threading.Thread(target=target)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout_seconds)
+    
+    if thread.is_alive():
         logger.error(f"Function {func.__name__} timed out after {timeout_seconds} seconds")
         return None
-    except Exception as e:
-        signal.alarm(0)  # Make sure to cancel timeout
-        raise e
+    
+    if exception[0]:
+        raise exception[0]
+    
+    return result[0]
 
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -161,14 +160,19 @@ def predict():
         if len(image_bytes) < 50:
             return jsonify({'error': 'Image data too small, likely corrupted'}), 400
         
-        # Check image format (basic validation)
+        # Check image format (basic validation) - added WEBP support
         if not image_bytes.startswith((b'\xff\xd8', b'\x89PNG', b'GIF', b'RIFF')):
             logger.warning("Image doesn't appear to be a standard format")
         
         # Make prediction with timeout handling
         try:
             logger.info("Starting prediction with timeout protection...")
-            result = run_with_timeout(make_prediction, (image_bytes,), timeout_seconds=25)
+            start_time = time.time()
+            
+            result = run_with_timeout(make_prediction, (image_bytes,), timeout_seconds=80)
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"Prediction took {elapsed_time:.2f} seconds")
             
             if result is None:
                 logger.error("Prediction timed out")
@@ -184,7 +188,8 @@ def predict():
             return jsonify({
                 "predicted_class": str(predicted_class),
                 "confidence": float(confidence),
-                "status": "success"
+                "status": "success",
+                "processing_time": f"{elapsed_time:.2f}s"
             })
             
         except Exception as pred_error:
