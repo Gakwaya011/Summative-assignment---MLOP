@@ -27,7 +27,7 @@ retrain_model = None
 def load_modules():
     """Load prediction and training modules with comprehensive error handling."""
     global make_prediction, retrain_model
-    
+
     try:
         from src.predictor import make_prediction
         from src.train import retrain_model
@@ -101,58 +101,56 @@ def predict():
     """Image prediction endpoint."""
     try:
         logger.info("Prediction request received")
-        
+
         if make_prediction is None:
             return jsonify({'error': 'Prediction module not loaded'}), 500
-        
-        # Extract image input (can be bytes or base64 string)
+
         image_input = None
-        
+
         if 'file' in request.files:
             file = request.files['file']
             if file.filename == '':
                 return jsonify({'error': 'No file selected'}), 400
             image_input = file.read()
             logger.info(f"Received file upload: {len(image_input)} bytes")
-            
+
         elif request.is_json and 'image' in request.json:
             image_input = request.json['image']
             if not isinstance(image_input, str):
                 return jsonify({'error': 'Image field must be a base64-encoded string'}), 400
             logger.info(f"Received base64 image string")
-        
+            try:
+                image_input = base64.b64decode(image_input)
+            except Exception as e:
+                return jsonify({'error': f'Invalid base64 string: {str(e)}'}), 400
         else:
             return jsonify({'error': "No image data provided. Send 'file' in form-data or 'image' in JSON."}), 400
-        
-        # Basic validation
+
         if not image_input:
             return jsonify({'error': 'Empty image data'}), 400
-        
-        # Make prediction
+
         try:
             predicted_class, confidence = make_prediction(image_input)
             logger.info(f"Prediction successful: {predicted_class}, {confidence}")
-            
+
             return jsonify({
                 "predicted_class": str(predicted_class),
                 "confidence": float(confidence),
                 "status": "success"
             })
-            
+
         except Exception as pred_error:
             logger.error(f"Prediction function error: {str(pred_error)}")
             logger.error(traceback.format_exc())
             return jsonify({'error': f'Prediction failed: {str(pred_error)}'}), 500
-            
+
     except Exception as e:
         logger.error(f"Unexpected error in predict route: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
-
 @app.route('/retrain', methods=['POST'])
 def retrain():
-    """Model retraining endpoint."""
     temp_dir = None
 
     def find_deepest_dir_with_images(root_dir):
@@ -164,39 +162,34 @@ def retrain():
 
     try:
         logger.info("Retrain request received")
-        
+
         if retrain_model is None:
             return jsonify({'error': 'Retrain module not loaded'}), 500
-        
-        # Validate request
+
         if 'zip_file' not in request.files:
             return jsonify({'error': 'No zip_file in request.files'}), 400
-        
+
         zip_file = request.files['zip_file']
         if zip_file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
-            
+
         filename = secure_filename(zip_file.filename)
         if not filename.endswith('.zip'):
             return jsonify({'error': 'Uploaded file must be a .zip file'}), 400
-        
+
         logger.info(f"Processing zip file: {filename}")
-        
-        # Create temporary directory
+
         temp_dir = "temp_retrain_data"
         os.makedirs(temp_dir, exist_ok=True)
-        
-        # Save and extract zip file
+
         zip_file_path = os.path.join(temp_dir, filename)
         zip_file.save(zip_file_path)
         logger.info(f"Zip file saved to: {zip_file_path}")
-        
-        # Extract zip file
+
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
         logger.info("Zip file extracted successfully")
-        
-        # List contents for debugging
+
         extracted_contents = []
         for root, dirs, files in os.walk(temp_dir):
             level = root.replace(temp_dir, '').count(os.sep)
@@ -206,21 +199,18 @@ def retrain():
             for file in files:
                 logger.info(f"{subindent}{file}")
                 extracted_contents.append(os.path.join(root, file))
-        
-        # Find the actual data directory with images (recursive search)
+
         actual_data_dir = find_deepest_dir_with_images(temp_dir)
         if actual_data_dir is None:
             logger.error("No images found in extracted zip data")
             return jsonify({'error': 'No images found in uploaded zip file'}), 400
-        
+
         logger.info(f"Using directory for retraining: {actual_data_dir}")
-        
-        # Start retraining
+
         logger.info("Starting model retraining...")
         history = retrain_model(actual_data_dir)
         logger.info("Retraining completed successfully")
-        
-        # Extract metrics safely
+
         metrics = {}
         try:
             if hasattr(history, 'history') and history.history:
@@ -247,20 +237,19 @@ def retrain():
         except Exception as metrics_error:
             logger.error(f"Error extracting metrics: {str(metrics_error)}")
             metrics = {'error': 'Could not extract training metrics'}
-        
+
         return jsonify({
             'message': 'Retraining completed successfully.',
             'metrics': metrics,
             'status': 'success'
         })
-        
+
     except Exception as e:
         logger.error(f"Error in retrain route: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Retraining failed: {str(e)}'}), 500
-        
+
     finally:
-        # Cleanup temporary directory
         if temp_dir and os.path.exists(temp_dir):
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
