@@ -7,8 +7,8 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLRO
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 MODEL_SAVE_PATH = os.path.join(PROJECT_ROOT, 'models', 'vehicle_classifier_model.keras')
 IMG_HEIGHT, IMG_WIDTH = 128, 128
-BATCH_SIZE = 32 
-EPOCHS = 10  # Reduced for faster training on cloud
+BATCH_SIZE = 8
+EPOCHS = 5  # Reduced for faster training on cloud
 
 def build_cnn_model(height, width, num_classes):
     """Build a CNN model for image classification."""
