@@ -86,25 +86,17 @@ def simple_preprocess_image(image_input):
     - Validates and fixes base64 padding if needed
     - Loads and resizes image
     - Converts to normalized numpy array with batch dimension
-    
-    Args:
-        image_input (bytes or str): Raw image bytes or base64-encoded string
-    
-    Returns:
-        np.ndarray or None: Preprocessed image array, or None on failure
     """
     if not PIL_AVAILABLE:
         logger.error("PIL not available for image processing")
         return None
-    
+
     try:
-        # If input is a string, assume base64 and decode it safely
+        # Decode base64 if input is string
         if isinstance(image_input, str):
-            # Fix missing padding in base64 if needed
             missing_padding = len(image_input) % 4
             if missing_padding != 0:
                 image_input += "=" * (4 - missing_padding)
-            
             try:
                 image_bytes = base64.b64decode(image_input, validate=True)
             except (binascii.Error, ValueError) as decode_err:
@@ -115,46 +107,43 @@ def simple_preprocess_image(image_input):
         else:
             logger.error(f"Invalid input type: {type(image_input)}")
             return None
-        
-        # Basic validation on raw bytes size
+
         if not image_bytes or len(image_bytes) < 50:
             logger.error("Image data too small or empty")
             return None
-        
-        # Remove any null bytes (optional, if you still want)
+
         clean_bytes = image_bytes.replace(b'\x00', b'')
-        
-        # Open image from bytes and verify format
-        image = Image.open(io.BytesIO(clean_bytes))
-        
+
+        image_stream = io.BytesIO(clean_bytes)
+        image = Image.open(image_stream)
+
+        # Try to verify the image
+        try:
+            image.verify()
+            image_stream.seek(0)
+            image = Image.open(image_stream)
+        except Exception:
+            image = Image.open(io.BytesIO(clean_bytes))  # fallback
+
         if image.format not in ["JPEG", "PNG", "GIF"]:
             logger.warning(f"Image format '{image.format}' not standard, attempting to continue")
-        
-        # Convert to RGB if not already
+
         if image.mode != 'RGB':
             image = image.convert('RGB')
-        
-        # Resize to model expected input size
+
         image = image.resize((IMG_WIDTH, IMG_HEIGHT), Image.Resampling.LANCZOS)
-        
-        # Convert to numpy and normalize
         image_array = np.array(image).astype(np.float32) / 255.0
-        
-        # Check shape
+
         if image_array.shape != (IMG_HEIGHT, IMG_WIDTH, 3):
             logger.error(f"Unexpected image shape: {image_array.shape}")
             return None
-        
-        # Add batch dimension
+
         image_array = np.expand_dims(image_array, axis=0)
-        
         logger.info(f"Image preprocessed successfully: shape {image_array.shape}")
         return image_array
-    
+
     except Exception as e:
         logger.error(f"Error preprocessing image: {e}")
-        
-        # Save corrupted bytes for debug if possible
         try:
             debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.jpg")
             with open(debug_path, "wb") as f:
@@ -162,32 +151,21 @@ def simple_preprocess_image(image_input):
             logger.info(f"Saved invalid image bytes to {debug_path} for inspection.")
         except Exception as dump_error:
             logger.error(f"Failed to save debug image: {dump_error}")
-        
         return None
-
-
 
 
 def make_prediction(image_input):
     """
     Make a prediction with extensive error handling.
-    
-    Args:
-        image_input (bytes or str): Raw image bytes or base64-encoded string
-        
-    Returns:
-        tuple: (predicted_class, confidence)
     """
     global model
 
     try:
-        # Load model if not already loaded
         if model is None:
             if not load_model():
                 logger.error("Could not load model")
                 return "error_no_model", 0.0
 
-        # Handle base64-encoded image input
         if isinstance(image_input, str):
             try:
                 image_bytes = base64.b64decode(image_input)
@@ -202,14 +180,11 @@ def make_prediction(image_input):
             return "error_invalid_type", 0.0
 
         logger.info(f"Processing image with {len(image_bytes)} bytes")
-
-        # Preprocess image
         processed_image = simple_preprocess_image(image_bytes)
         if processed_image is None:
             logger.error("Image preprocessing failed")
             return "error_preprocessing", 0.0
 
-        # Make prediction
         if not TF_AVAILABLE or model is None:
             logger.warning("Model not available, returning random prediction")
             return "unknown", 0.5
@@ -242,7 +217,7 @@ def make_prediction(image_input):
         logger.error(f"Unexpected error in make_prediction: {e}")
         return "error_unexpected", 0.0
 
-# Initialize model when module is imported
+# Initialize model on module import
 try:
     load_model()
 except Exception as e:
