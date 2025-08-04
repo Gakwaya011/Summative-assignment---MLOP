@@ -93,19 +93,52 @@ def simple_preprocess_image(image_bytes):
         if not image_bytes or len(image_bytes) < 50:
             raise ValueError("Invalid image data")
         
-        # Remove any null bytes that might cause issues
-        clean_bytes = image_bytes.replace(b'\x00', b'')
+        logger.info(f"Original image bytes length: {len(image_bytes)}")
+        logger.info(f"First 20 bytes (hex): {image_bytes[:20].hex()}")
         
-        # Convert bytes to PIL Image
-        image = Image.open(io.BytesIO(clean_bytes))
+        # Check if bytes start with data URL prefix and strip it
+        if isinstance(image_bytes, str):
+            # If somehow we got a string instead of bytes
+            if image_bytes.startswith('data:image'):
+                image_bytes = image_bytes.split(',')[1]
+            # Convert base64 string to bytes
+            import base64
+            image_bytes = base64.b64decode(image_bytes)
         
-        # Optional format check (JPEG/PNG)
-        if image.format not in ["JPEG", "PNG"]:
-            raise ValueError(f"Unsupported image format: {image.format}")
+        # Validate image format by checking magic bytes
+        if not (image_bytes.startswith(b'\xff\xd8\xff') or  # JPEG
+                image_bytes.startswith(b'\x89PNG\r\n\x1a\n') or  # PNG
+                image_bytes.startswith(b'GIF8')):  # GIF
+            logger.warning(f"Unknown image format. First 10 bytes: {image_bytes[:10].hex()}")
+            # Don't fail immediately, let PIL try to handle it
+        
+        # Try to create PIL Image with better error handling
+        try:
+            image_stream = io.BytesIO(image_bytes)
+            image = Image.open(image_stream)
+            # Force load the image to catch any format issues early
+            image.load()
+            logger.info(f"Successfully opened image: {image.format}, {image.mode}, {image.size}")
+        except Exception as pil_error:
+            logger.error(f"PIL failed to open image: {pil_error}")
+            # Try alternative approach - save to temp file and reload
+            try:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                    temp_file.write(image_bytes)
+                    temp_file.flush()
+                    image = Image.open(temp_file.name)
+                    image.load()
+                    os.unlink(temp_file.name)  # Clean up temp file
+                    logger.info("Successfully opened image using temp file method")
+            except Exception as temp_error:
+                logger.error(f"Temp file method also failed: {temp_error}")
+                raise pil_error  # Re-raise original error
         
         # Convert to RGB
         if image.mode != 'RGB':
             image = image.convert('RGB')
+            logger.info(f"Converted image to RGB mode")
         
         # Resize image
         image = image.resize((IMG_WIDTH, IMG_HEIGHT), Image.Resampling.LANCZOS)
@@ -129,12 +162,22 @@ def simple_preprocess_image(image_bytes):
     except Exception as e:
         logger.error(f"Error preprocessing image: {e}")
         
-        # Dump image bytes for debugging
+        # Enhanced debugging - save image bytes for inspection
         try:
-            debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.jpg")
+            debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.bin")
             with open(debug_path, "wb") as f:
                 f.write(image_bytes)
             logger.info(f"Saved invalid image bytes to {debug_path} for inspection.")
+            
+            # Also try to save as different formats for debugging
+            for ext in ['.jpg', '.png', '.gif']:
+                try:
+                    debug_path_ext = os.path.join(PROJECT_ROOT, f"failed_image_debug{ext}")
+                    with open(debug_path_ext, "wb") as f:
+                        f.write(image_bytes)
+                except:
+                    pass
+                    
         except Exception as dump_error:
             logger.error(f"Failed to save debug image: {dump_error}")
         
@@ -164,7 +207,7 @@ def make_prediction(image_bytes):
             logger.error("No image bytes provided")
             return "error_no_data", 0.0
 
-        if not isinstance(image_bytes, bytes):
+        if not isinstance(image_bytes, (bytes, str)):
             logger.error(f"Invalid image_bytes type: {type(image_bytes)}")
             return "error_invalid_type", 0.0
 
@@ -201,7 +244,7 @@ def make_prediction(image_bytes):
             predicted_class = class_names[0] if confidence > 0.5 else class_names[-1]
 
         elif len(predictions.shape) == 1:
-            # Single-output fallback (shouldn’t happen ideally)
+            # Single-output fallback (shouldn't happen ideally)
             confidence = float(predictions[0])
             predicted_class = class_names[0] if confidence > 0.5 else class_names[-1]
 
@@ -215,6 +258,8 @@ def make_prediction(image_bytes):
 
     except Exception as e:
         logger.error(f"Unexpected error in make_prediction: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return "error_unexpected", 0.0
 
 
