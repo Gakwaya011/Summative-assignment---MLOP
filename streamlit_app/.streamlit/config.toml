@@ -1,0 +1,9 @@
+[server]
+headless = true
+port = 8501  # Default port, will be overridden by CLI
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 5
+[browser]
+serverAddress = "0.0.0.0"
+gatherUsageStats = false

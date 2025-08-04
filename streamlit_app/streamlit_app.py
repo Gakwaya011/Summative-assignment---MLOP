@@ -5,6 +5,11 @@ import os
 from io import BytesIO
 import pandas as pd
 import matplotlib.pyplot as plt
+import streamlit as st
+import psutil
+st.sidebar.write("Memory usage:", psutil.virtual_memory().percent, "%")
+st.write("Current config:", st.config.get_option("server.port"))
+st.write(f"Running on port: {os.environ.get('PORT', 'default')}")
 
 # --- App Configuration ---
 st.set_page_config(
