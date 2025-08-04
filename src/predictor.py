@@ -2,6 +2,9 @@ import os
 import numpy as np
 import logging
 import base64
+import binascii
+import io
+from PIL import Image
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -75,71 +78,93 @@ def load_model():
         model = create_dummy_model()
         return model is not None
 
-def simple_preprocess_image(image_bytes):
+
+def simple_preprocess_image(image_input):
     """
-    Simple image preprocessing that's less likely to fail.
+    Robust image preprocessing:
+    - Accepts bytes or base64 string input
+    - Validates and fixes base64 padding if needed
+    - Loads and resizes image
+    - Converts to normalized numpy array with batch dimension
     
     Args:
-        image_bytes (bytes): Raw image bytes
-        
+        image_input (bytes or str): Raw image bytes or base64-encoded string
+    
     Returns:
-        np.ndarray or None: Preprocessed image array
+        np.ndarray or None: Preprocessed image array, or None on failure
     """
     if not PIL_AVAILABLE:
         logger.error("PIL not available for image processing")
         return None
     
     try:
-        # Basic validation
-        if not image_bytes or len(image_bytes) < 50:
-            raise ValueError("Invalid image data")
+        # If input is a string, assume base64 and decode it safely
+        if isinstance(image_input, str):
+            # Fix missing padding in base64 if needed
+            missing_padding = len(image_input) % 4
+            if missing_padding != 0:
+                image_input += "=" * (4 - missing_padding)
+            
+            try:
+                image_bytes = base64.b64decode(image_input, validate=True)
+            except (binascii.Error, ValueError) as decode_err:
+                logger.error(f"Base64 decode error: {decode_err}")
+                return None
+        elif isinstance(image_input, bytes):
+            image_bytes = image_input
+        else:
+            logger.error(f"Invalid input type: {type(image_input)}")
+            return None
         
-        # Remove any null bytes that might cause issues
+        # Basic validation on raw bytes size
+        if not image_bytes or len(image_bytes) < 50:
+            logger.error("Image data too small or empty")
+            return None
+        
+        # Remove any null bytes (optional, if you still want)
         clean_bytes = image_bytes.replace(b'\x00', b'')
         
-        # Convert bytes to PIL Image
+        # Open image from bytes and verify format
         image = Image.open(io.BytesIO(clean_bytes))
         
-        # Optional format check (JPEG/PNG)
-        if image.format not in ["JPEG", "PNG"]:
-            raise ValueError(f"Unsupported image format: {image.format}")
+        if image.format not in ["JPEG", "PNG", "GIF"]:
+            logger.warning(f"Image format '{image.format}' not standard, attempting to continue")
         
-        # Convert to RGB
+        # Convert to RGB if not already
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Resize image
+        # Resize to model expected input size
         image = image.resize((IMG_WIDTH, IMG_HEIGHT), Image.Resampling.LANCZOS)
         
-        # Convert to numpy array
-        image_array = np.array(image)
+        # Convert to numpy and normalize
+        image_array = np.array(image).astype(np.float32) / 255.0
         
-        # Validate array shape
+        # Check shape
         if image_array.shape != (IMG_HEIGHT, IMG_WIDTH, 3):
-            raise ValueError(f"Unexpected image shape: {image_array.shape}")
-        
-        # Normalize pixel values
-        image_array = image_array.astype(np.float32) / 255.0
+            logger.error(f"Unexpected image shape: {image_array.shape}")
+            return None
         
         # Add batch dimension
         image_array = np.expand_dims(image_array, axis=0)
         
         logger.info(f"Image preprocessed successfully: shape {image_array.shape}")
         return image_array
-        
+    
     except Exception as e:
         logger.error(f"Error preprocessing image: {e}")
         
-        # Dump image bytes for debugging
+        # Save corrupted bytes for debug if possible
         try:
             debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.jpg")
             with open(debug_path, "wb") as f:
-                f.write(image_bytes)
+                f.write(image_bytes if 'image_bytes' in locals() else b'')
             logger.info(f"Saved invalid image bytes to {debug_path} for inspection.")
         except Exception as dump_error:
             logger.error(f"Failed to save debug image: {dump_error}")
         
         return None
+
 
 
 

@@ -154,6 +154,14 @@ def predict():
 def retrain():
     """Model retraining endpoint."""
     temp_dir = None
+
+    def find_deepest_dir_with_images(root_dir):
+        for root, dirs, files in os.walk(root_dir):
+            for file in files:
+                if file.lower().endswith(('.bmp', '.gif', '.jpeg', '.jpg', '.png')):
+                    return root
+        return None
+
     try:
         logger.info("Retrain request received")
         
@@ -199,14 +207,13 @@ def retrain():
                 logger.info(f"{subindent}{file}")
                 extracted_contents.append(os.path.join(root, file))
         
-        # Find the actual data directory (skip the zip file itself)
-        data_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
-        if data_dirs:
-            actual_data_dir = os.path.join(temp_dir, data_dirs[0])
-            logger.info(f"Using data directory: {actual_data_dir}")
-        else:
-            actual_data_dir = temp_dir
-            logger.info(f"Using temp directory directly: {actual_data_dir}")
+        # Find the actual data directory with images (recursive search)
+        actual_data_dir = find_deepest_dir_with_images(temp_dir)
+        if actual_data_dir is None:
+            logger.error("No images found in extracted zip data")
+            return jsonify({'error': 'No images found in uploaded zip file'}), 400
+        
+        logger.info(f"Using directory for retraining: {actual_data_dir}")
         
         # Start retraining
         logger.info("Starting model retraining...")
