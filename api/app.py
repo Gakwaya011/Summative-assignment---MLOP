@@ -4,8 +4,6 @@ import shutil
 import zipfile
 import traceback
 import logging
-import threading
-import time
 from io import BytesIO
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -77,31 +75,6 @@ load_modules()
 app = Flask(__name__)
 CORS(app)
 
-def run_with_timeout(func, args, timeout_seconds=80):
-    """Run a function with a timeout using threading."""
-    result = [None]
-    exception = [None]
-    
-    def target():
-        try:
-            result[0] = func(*args)
-        except Exception as e:
-            exception[0] = e
-    
-    thread = threading.Thread(target=target)
-    thread.daemon = True
-    thread.start()
-    thread.join(timeout_seconds)
-    
-    if thread.is_alive():
-        logger.error(f"Function {func.__name__} timed out after {timeout_seconds} seconds")
-        return None
-    
-    if exception[0]:
-        raise exception[0]
-    
-    return result[0]
-
 @app.errorhandler(Exception)
 def handle_exception(e):
     """Global exception handler."""
@@ -160,46 +133,25 @@ def predict():
         if len(image_bytes) < 50:
             return jsonify({'error': 'Image data too small, likely corrupted'}), 400
         
-        # Check image format (basic validation) - added WEBP support
-        if not image_bytes.startswith((b'\xff\xd8', b'\x89PNG', b'GIF', b'RIFF')):
+        # Check image format (basic validation)
+        if not image_bytes.startswith((b'\xff\xd8', b'\x89PNG', b'GIF')):
             logger.warning("Image doesn't appear to be a standard format")
         
-        # Make prediction with timeout handling
+        # Make prediction with error handling
         try:
-            logger.info("Starting prediction with timeout protection...")
-            start_time = time.time()
-            
-            result = run_with_timeout(make_prediction, (image_bytes,), timeout_seconds=80)
-            
-            elapsed_time = time.time() - start_time
-            logger.info(f"Prediction took {elapsed_time:.2f} seconds")
-            
-            if result is None:
-                logger.error("Prediction timed out")
-                return jsonify({
-                    'error': 'Prediction timed out - server may be overloaded',
-                    'predicted_class': 'timeout_error',
-                    'confidence': 0.0
-                }), 408  # Request Timeout
-            
-            predicted_class, confidence = result
+            predicted_class, confidence = make_prediction(image_bytes)
             logger.info(f"Prediction successful: {predicted_class}, {confidence}")
             
             return jsonify({
                 "predicted_class": str(predicted_class),
                 "confidence": float(confidence),
-                "status": "success",
-                "processing_time": f"{elapsed_time:.2f}s"
+                "status": "success"
             })
             
         except Exception as pred_error:
             logger.error(f"Prediction function error: {str(pred_error)}")
             logger.error(traceback.format_exc())
-            return jsonify({
-                'error': f'Prediction failed: {str(pred_error)}',
-                'predicted_class': 'error_prediction',
-                'confidence': 0.0
-            }), 500
+            return jsonify({'error': f'Prediction failed: {str(pred_error)}'}), 500
             
     except Exception as e:
         logger.error(f"Unexpected error in predict route: {str(e)}")
