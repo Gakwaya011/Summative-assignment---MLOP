@@ -105,41 +105,32 @@ def predict():
         if make_prediction is None:
             return jsonify({'error': 'Prediction module not loaded'}), 500
         
-        # Extract image data
-        image_bytes = None
+        # Extract image input (can be bytes or base64 string)
+        image_input = None
         
         if 'file' in request.files:
             file = request.files['file']
             if file.filename == '':
                 return jsonify({'error': 'No file selected'}), 400
-            image_bytes = file.read()
-            logger.info(f"Received file upload: {len(image_bytes)} bytes")
+            image_input = file.read()
+            logger.info(f"Received file upload: {len(image_input)} bytes")
             
         elif request.is_json and 'image' in request.json:
-            try:
-                image_b64 = request.json['image']
-                image_bytes = base64.b64decode(image_b64)
-                logger.info(f"Received base64 image: {len(image_bytes)} bytes")
-            except Exception as e:
-                logger.error(f"Error decoding base64: {str(e)}")
-                return jsonify({'error': f'Error decoding base64 image: {str(e)}'}), 400
+            image_input = request.json['image']
+            if not isinstance(image_input, str):
+                return jsonify({'error': 'Image field must be a base64-encoded string'}), 400
+            logger.info(f"Received base64 image string")
+        
         else:
             return jsonify({'error': "No image data provided. Send 'file' in form-data or 'image' in JSON."}), 400
         
-        # Validate image data
-        if not image_bytes:
+        # Basic validation
+        if not image_input:
             return jsonify({'error': 'Empty image data'}), 400
         
-        if len(image_bytes) < 50:
-            return jsonify({'error': 'Image data too small, likely corrupted'}), 400
-        
-        # Check image format (basic validation)
-        if not image_bytes.startswith((b'\xff\xd8', b'\x89PNG', b'GIF')):
-            logger.warning("Image doesn't appear to be a standard format")
-        
-        # Make prediction with error handling
+        # Make prediction
         try:
-            predicted_class, confidence = make_prediction(image_bytes)
+            predicted_class, confidence = make_prediction(image_input)
             logger.info(f"Prediction successful: {predicted_class}, {confidence}")
             
             return jsonify({
@@ -157,6 +148,7 @@ def predict():
         logger.error(f"Unexpected error in predict route: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
 
 @app.route('/retrain', methods=['POST'])
 def retrain():

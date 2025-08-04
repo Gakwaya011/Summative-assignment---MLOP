@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import logging
+import base64
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -140,77 +141,78 @@ def simple_preprocess_image(image_bytes):
         
         return None
 
-def make_prediction(image_bytes):
+
+
+def make_prediction(image_input):
     """
     Make a prediction with extensive error handling.
     
     Args:
-        image_bytes (bytes): Raw image bytes
+        image_input (bytes or str): Raw image bytes or base64-encoded string
         
     Returns:
         tuple: (predicted_class, confidence)
     """
     global model
-    
+
     try:
         # Load model if not already loaded
         if model is None:
             if not load_model():
                 logger.error("Could not load model")
                 return "error_no_model", 0.0
-        
-        # Basic input validation
-        if not image_bytes:
-            logger.error("No image bytes provided")
-            return "error_no_data", 0.0
-        
-        if not isinstance(image_bytes, bytes):
-            logger.error(f"Invalid image_bytes type: {type(image_bytes)}")
+
+        # Handle base64-encoded image input
+        if isinstance(image_input, str):
+            try:
+                image_bytes = base64.b64decode(image_input)
+                logger.info(f"Base64 image decoded successfully ({len(image_bytes)} bytes)")
+            except Exception as e:
+                logger.error(f"Failed to decode base64 image: {e}")
+                return "error_base64_decode", 0.0
+        elif isinstance(image_input, bytes):
+            image_bytes = image_input
+        else:
+            logger.error(f"Invalid image_input type: {type(image_input)}")
             return "error_invalid_type", 0.0
-        
+
         logger.info(f"Processing image with {len(image_bytes)} bytes")
-        
+
         # Preprocess image
         processed_image = simple_preprocess_image(image_bytes)
         if processed_image is None:
             logger.error("Image preprocessing failed")
             return "error_preprocessing", 0.0
-        
+
         # Make prediction
         if not TF_AVAILABLE or model is None:
             logger.warning("Model not available, returning random prediction")
             return "unknown", 0.5
-        
+
         try:
             predictions = model.predict(processed_image, verbose=0)
             logger.info(f"Model prediction successful, shape: {predictions.shape}")
-            
-            # Handle different prediction formats
+
             if len(predictions.shape) == 2:
                 if predictions.shape[1] > 1:
-                    # Multi-class classification
                     predicted_index = np.argmax(predictions[0])
                     confidence = float(predictions[0][predicted_index])
                     predicted_class = class_names[min(predicted_index, len(class_names) - 1)]
                 else:
-                    # Binary classification
                     confidence = float(predictions[0][0])
                     predicted_class = class_names[0] if confidence > 0.5 else "background"
             else:
-                # Single prediction
                 confidence = float(predictions[0])
                 predicted_class = class_names[0] if confidence > 0.5 else "background"
-            
-            # Ensure valid confidence range
+
             confidence = max(0.0, min(1.0, confidence))
-            
             logger.info(f"Prediction: {predicted_class}, Confidence: {confidence:.4f}")
             return str(predicted_class), float(confidence)
-            
+
         except Exception as pred_error:
             logger.error(f"Model prediction error: {pred_error}")
             return "error_prediction", 0.0
-        
+
     except Exception as e:
         logger.error(f"Unexpected error in make_prediction: {e}")
         return "error_unexpected", 0.0

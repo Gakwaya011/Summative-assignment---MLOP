@@ -29,7 +29,14 @@ st.markdown("Upload a photo of a car or a motorcycle for a prediction, or upload
 # --- Prediction Function ---
 def get_prediction(image_bytes):
     try:
-        base64_encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+        # Force convert to JPEG bytes using PIL (ensures clean decoding on backend)
+        from PIL import Image
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        buffered = BytesIO()
+        img.save(buffered, format="JPEG")
+        jpeg_bytes = buffered.getvalue()
+
+        base64_encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
         payload = {"image": base64_encoded_image}
         response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=30)
         response.raise_for_status()
