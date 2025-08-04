@@ -155,7 +155,7 @@ Just connect your GitHub repo and Render handles the rest!
 
 ## 📺 Demo
 
-[🎥 Watch the Demo](YOUR_YOUTUBE_DEMO_LINK_HERE) - See predictions and retraining in action
+[🎥 Watch the Demo](https://youtu.be/WIwkCnmefeU) - See predictions and retraining in action
 
 ## ⚡ Performance Testing
 
@@ -163,10 +163,10 @@ Load tested with **Locust** to ensure production readiness:
 
 | Configuration | Max Users | RPS | Median Latency | 95th Percentile |
 |---------------|-----------|-----|----------------|-----------------|
-| 1 Container   | 50      |  | 22 ms         | 420 ms          |
+| 1 Container   | 50      | 43 | 22 ms         | 420 ms          |
 | 2 Containers  | 100      | 45 | 180 ms         | 300 ms          |
 
-> 📊 **Note**: Update with your actual metrics after testing
+
 
 ## 🏗️ MLOps Best Practices
 
