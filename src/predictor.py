@@ -1,6 +1,9 @@
 import os
 import numpy as np
 import logging
+from PIL import Image
+import io
+import traceback
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -10,19 +13,18 @@ try:
     import tensorflow as tf
     from tensorflow import keras
     TF_AVAILABLE = True
-    logger.info("TensorFlow imported successfully")
+    logger.info("TensorFlow imported successfully.")
 except ImportError as e:
-    logger.error(f"TensorFlow import failed: {e}")
+    logger.error(f"TensorFlow import failed: {e}", exc_info=True)
     TF_AVAILABLE = False
 
 # Try to import PIL with error handling
 try:
     from PIL import Image
-    import io
     PIL_AVAILABLE = True
-    logger.info("PIL imported successfully")
+    logger.info("PIL imported successfully.")
 except ImportError as e:
-    logger.error(f"PIL import failed: {e}")
+    logger.error(f"PIL import failed: {e}", exc_info=True)
     PIL_AVAILABLE = False
 
 # Constants
@@ -43,13 +45,13 @@ def create_dummy_model():
         dummy_model = keras.Sequential([
             keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
             keras.layers.GlobalAveragePooling2D(),
-            keras.layers.Dense(1, activation='sigmoid')
+            keras.layers.Dense(len(class_names) - 1, activation='softmax')
         ])
-        dummy_model.compile(optimizer='adam', loss='binary_crossentropy')
-        logger.info("Created dummy model")
+        dummy_model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
+        logger.info("Created dummy model.")
         return dummy_model
     except Exception as e:
-        logger.error(f"Error creating dummy model: {e}")
+        logger.error(f"Error creating dummy model: {e}", exc_info=True)
         return None
 
 def load_model():
@@ -57,7 +59,7 @@ def load_model():
     global model
     
     if not TF_AVAILABLE:
-        logger.error("TensorFlow not available, cannot load model")
+        logger.error("TensorFlow not available, cannot load model.")
         return False
     
     try:
@@ -66,78 +68,52 @@ def load_model():
             logger.info("Model loaded successfully for prediction.")
             return True
         else:
-            logger.warning(f"Model not found at {MODEL_PATH}, creating dummy model")
+            logger.warning(f"Model not found at {MODEL_PATH}, creating dummy model.")
             model = create_dummy_model()
             return model is not None
     except Exception as e:
-        logger.error(f"Error loading model: {e}")
+        logger.error(f"Error loading model from {MODEL_PATH}: {e}", exc_info=True)
         model = create_dummy_model()
         return model is not None
 
 def simple_preprocess_image(image_bytes):
     """
-    Simple image preprocessing that's less likely to fail.
+    Robust image preprocessing function.
     
     Args:
-        image_bytes (bytes): Raw image bytes
+        image_bytes (bytes): Raw image bytes.
         
     Returns:
-        np.ndarray or None: Preprocessed image array
+        np.ndarray or None: Preprocessed image array.
     """
     if not PIL_AVAILABLE:
-        logger.error("PIL not available for image processing")
+        logger.error("PIL not available for image processing.")
         return None
     
     try:
-        # Basic validation
         if not image_bytes or len(image_bytes) < 50:
-            raise ValueError("Invalid image data")
+            raise ValueError("Invalid or empty image data.")
         
-        # Remove any null bytes that might cause issues
-        clean_bytes = image_bytes.replace(b'\x00', b'')
+        image = Image.open(io.BytesIO(image_bytes))
         
-        # Convert bytes to PIL Image
-        image = Image.open(io.BytesIO(clean_bytes))
-        
-        # Optional format check (JPEG/PNG)
-        if image.format not in ["JPEG", "PNG"]:
-            raise ValueError(f"Unsupported image format: {image.format}")
-        
-        # Convert to RGB
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Resize image
         image = image.resize((IMG_WIDTH, IMG_HEIGHT), Image.Resampling.LANCZOS)
         
-        # Convert to numpy array
         image_array = np.array(image)
         
-        # Validate array shape
         if image_array.shape != (IMG_HEIGHT, IMG_WIDTH, 3):
             raise ValueError(f"Unexpected image shape: {image_array.shape}")
         
-        # Normalize pixel values
         image_array = image_array.astype(np.float32) / 255.0
-        
-        # Add batch dimension
         image_array = np.expand_dims(image_array, axis=0)
         
-        logger.info(f"Image preprocessed successfully: shape {image_array.shape}")
+        logger.info(f"Image preprocessed successfully: shape {image_array.shape}.")
         return image_array
         
     except Exception as e:
-        logger.error(f"Error preprocessing image: {e}")
-        
-        # Dump image bytes for debugging
-        try:
-            debug_path = os.path.join(PROJECT_ROOT, "failed_image_debug.jpg")
-            with open(debug_path, "wb") as f:
-                f.write(image_bytes)
-            logger.info(f"Saved invalid image bytes to {debug_path} for inspection.")
-        except Exception as dump_error:
-            logger.error(f"Failed to save debug image: {dump_error}")
-        
+        logger.error(f"Error preprocessing image: {e}", exc_info=True)
         return None
 
 def make_prediction(image_bytes):
@@ -145,7 +121,7 @@ def make_prediction(image_bytes):
     Make a prediction with extensive error handling.
     
     Args:
-        image_bytes (bytes): Raw image bytes
+        image_bytes (bytes): Raw image bytes.
         
     Returns:
         tuple: (predicted_class, confidence)
@@ -153,60 +129,29 @@ def make_prediction(image_bytes):
     global model
 
     try:
-        # Load model if not already loaded
         if model is None:
             if not load_model():
-                logger.error("Could not load model")
+                logger.error("Could not load model.")
                 return "error_no_model", 0.0
 
-        # Basic input validation
-        if not image_bytes:
-            logger.error("No image bytes provided")
+        if not isinstance(image_bytes, bytes) or not image_bytes:
+            logger.error(f"Invalid or empty image_bytes provided.")
             return "error_no_data", 0.0
 
-        if not isinstance(image_bytes, bytes):
-            logger.error(f"Invalid image_bytes type: {type(image_bytes)}")
-            return "error_invalid_type", 0.0
-
-        logger.info(f"Processing image with {len(image_bytes)} bytes")
-
-        # Preprocess image
         processed_image = simple_preprocess_image(image_bytes)
         if processed_image is None:
-            logger.error("Image preprocessing failed")
+            logger.error("Image preprocessing failed.")
             return "error_preprocessing", 0.0
 
-        # Model check
-        if not TF_AVAILABLE or model is None:
-            logger.warning("Model not available, returning unknown")
-            return "unknown", 0.5
-
-        # Make prediction
         predictions = model.predict(processed_image, verbose=0)
-        logger.info(f"Prediction output: {predictions}")
+        logger.info(f"Prediction output shape: {predictions.shape}")
 
-        # Interpret prediction based on output shape
-        if len(predictions.shape) == 2 and predictions.shape[1] > 1:
-            # Multi-class classification (softmax)
+        if len(predictions.shape) == 2 and predictions.shape[1] == len(class_names) - 1:
             predicted_index = int(np.argmax(predictions[0]))
             confidence = float(predictions[0][predicted_index])
-            predicted_class = (
-                class_names[predicted_index] if predicted_index < len(class_names)
-                else "unknown"
-            )
-
-        elif len(predictions.shape) == 2 and predictions.shape[1] == 1:
-            # Binary classification (sigmoid)
-            confidence = float(predictions[0][0])
-            predicted_class = class_names[0] if confidence > 0.5 else class_names[-1]
-
-        elif len(predictions.shape) == 1:
-            # Single-output fallback (shouldn’t happen ideally)
-            confidence = float(predictions[0])
-            predicted_class = class_names[0] if confidence > 0.5 else class_names[-1]
-
+            predicted_class = class_names[predicted_index]
         else:
-            logger.error(f"Unexpected prediction shape: {predictions.shape}")
+            logger.error(f"Unexpected prediction shape or output: {predictions.shape}")
             return "error_model_type_mismatch", 0.0
 
         confidence = round(max(0.0, min(1.0, confidence)), 4)
@@ -214,12 +159,10 @@ def make_prediction(image_bytes):
         return predicted_class, confidence
 
     except Exception as e:
-        logger.error(f"Unexpected error in make_prediction: {e}")
+        logger.error(f"Unexpected error in make_prediction: {e}", exc_info=True)
         return "error_unexpected", 0.0
 
-
-# Initialize model when module is imported
 try:
     load_model()
 except Exception as e:
-    logger.error(f"Error during module initialization: {e}")
+    logger.error(f"Error during module initialization: {e}", exc_info=True)

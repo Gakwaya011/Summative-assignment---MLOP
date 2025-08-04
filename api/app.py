@@ -9,9 +9,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import sys
+import threading
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging to be more descriptive
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Add the root directory to the Python path
@@ -31,18 +35,18 @@ def load_modules():
     try:
         from src.predictor import make_prediction
         from src.train import retrain_model
-        logger.info("Successfully imported using src.module")
+        logger.info("Successfully imported modules from src.")
         return True
     except ImportError as e:
-        logger.error(f"Import error with src.module: {e}")
+        logger.error(f"Import error with src.module: {e}. Attempting direct imports...")
+        # Fallback to direct imports
         try:
             from predictor import make_prediction
             from train import retrain_model
-            logger.info("Successfully imported using direct imports")
+            logger.info("Successfully imported using direct imports.")
             return True
         except ImportError as e2:
-            logger.error(f"Import error with direct imports: {e2}")
-            # Create safe fallback functions
+            logger.critical(f"Final import failed for all modules: {e2}. Application will run with fallbacks.")
             make_prediction = create_safe_prediction_fallback()
             retrain_model = create_safe_retrain_fallback()
             return False
@@ -50,21 +54,19 @@ def load_modules():
 def create_safe_prediction_fallback():
     """Create a safe fallback prediction function."""
     def safe_predict(image_bytes):
-        logger.info(f"Fallback prediction called with {len(image_bytes) if image_bytes else 0} bytes")
+        logger.warning(f"Fallback prediction called. Cannot make real predictions.")
         return "fallback_class", 0.5
     return safe_predict
 
 def create_safe_retrain_fallback():
     """Create a safe fallback retrain function."""
     def safe_retrain(data_dir):
-        logger.info(f"Fallback retrain called with data_dir: {data_dir}")
+        logger.warning(f"Fallback retrain called. Will not retrain.")
         class DummyHistory:
             def __init__(self):
                 self.history = {
-                    'accuracy': [0.5],
-                    'val_accuracy': [0.5], 
-                    'loss': [1.0],
-                    'val_loss': [1.0]
+                    'accuracy': [0.5], 'val_accuracy': [0.5],
+                    'loss': [1.0], 'val_loss': [1.0]
                 }
         return DummyHistory()
     return safe_retrain
@@ -78,9 +80,8 @@ CORS(app)
 @app.errorhandler(Exception)
 def handle_exception(e):
     """Global exception handler."""
-    logger.error(f"Unhandled exception: {str(e)}")
-    logger.error(traceback.format_exc())
-    return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+    logger.error(f"Unhandled exception: {e}", exc_info=True)
+    return jsonify({'error': f'Internal server error: {e}'}), 500
 
 @app.route('/')
 def index():
@@ -89,11 +90,11 @@ def index():
         return jsonify({
             'message': 'Vehicle Classifier API is running.',
             'status': 'healthy',
-            'prediction_available': make_prediction is not None,
-            'retrain_available': retrain_model is not None
+            'prediction_available': make_prediction.__name__ != 'safe_predict',
+            'retrain_available': retrain_model.__name__ != 'safe_retrain'
         })
     except Exception as e:
-        logger.error(f"Error in index route: {str(e)}")
+        logger.error(f"Error in index route: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/predict', methods=['POST'])
@@ -102,10 +103,9 @@ def predict():
     try:
         logger.info("Prediction request received")
         
-        if make_prediction is None:
+        if make_prediction.__name__ == 'safe_predict':
             return jsonify({'error': 'Prediction module not loaded'}), 500
         
-        # Extract image data
         image_bytes = None
         
         if 'file' in request.files:
@@ -113,50 +113,61 @@ def predict():
             if file.filename == '':
                 return jsonify({'error': 'No file selected'}), 400
             image_bytes = file.read()
-            logger.info(f"Received file upload: {len(image_bytes)} bytes")
-            
+            logger.info(f"Received file upload of {len(image_bytes)} bytes.")
         elif request.is_json and 'image' in request.json:
             try:
                 image_b64 = request.json['image']
                 image_bytes = base64.b64decode(image_b64)
-                logger.info(f"Received base64 image: {len(image_bytes)} bytes")
+                logger.info(f"Received base64 image of {len(image_bytes)} bytes.")
             except Exception as e:
-                logger.error(f"Error decoding base64: {str(e)}")
-                return jsonify({'error': f'Error decoding base64 image: {str(e)}'}), 400
+                logger.error(f"Error decoding base64: {e}", exc_info=True)
+                return jsonify({'error': f'Error decoding base64 image: {e}'}), 400
         else:
             return jsonify({'error': "No image data provided. Send 'file' in form-data or 'image' in JSON."}), 400
         
-        # Validate image data
         if not image_bytes:
             return jsonify({'error': 'Empty image data'}), 400
         
-        if len(image_bytes) < 50:
-            return jsonify({'error': 'Image data too small, likely corrupted'}), 400
+        predicted_class, confidence = make_prediction(image_bytes)
         
-        # Check image format (basic validation)
-        if not image_bytes.startswith((b'\xff\xd8', b'\x89PNG', b'GIF')):
-            logger.warning("Image doesn't appear to be a standard format")
+        if "error" in predicted_class:
+            return jsonify({'error': f"Prediction failed: {predicted_class}"}), 500
         
-        # Make prediction with error handling
-        try:
-            predicted_class, confidence = make_prediction(image_bytes)
-            logger.info(f"Prediction successful: {predicted_class}, {confidence}")
-            
-            return jsonify({
-                "predicted_class": str(predicted_class),
-                "confidence": float(confidence),
-                "status": "success"
-            })
-            
-        except Exception as pred_error:
-            logger.error(f"Prediction function error: {str(pred_error)}")
-            logger.error(traceback.format_exc())
-            return jsonify({'error': f'Prediction failed: {str(pred_error)}'}), 500
+        logger.info(f"Prediction successful: {predicted_class}, Confidence: {confidence}")
+        
+        return jsonify({
+            "predicted_class": str(predicted_class),
+            "confidence": float(confidence),
+            "status": "success"
+        })
             
     except Exception as e:
-        logger.error(f"Unexpected error in predict route: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+        logger.error(f"Unexpected error in predict route: {e}", exc_info=True)
+        return jsonify({'error': f'Unexpected error: {e}'}), 500
+
+def retrain_async(actual_data_dir):
+    """
+    A function to run the retraining process in a separate thread.
+    This prevents the web server from blocking and timing out.
+    """
+    try:
+        logger.info(f"Starting retraining process in background thread.")
+        history = retrain_model(actual_data_dir)
+        logger.info("Retraining completed successfully in background.")
+        
+        # You could save the metrics to a file or database here
+        # so the main API can retrieve the results later.
+        
+    except Exception as e:
+        logger.error(f"Background retraining process failed: {e}", exc_info=True)
+    finally:
+        # Cleanup temporary directory
+        if actual_data_dir and os.path.exists(actual_data_dir):
+            try:
+                shutil.rmtree(actual_data_dir, ignore_errors=True)
+                logger.info("Temporary retraining data cleaned up.")
+            except Exception as cleanup_error:
+                logger.error(f"Error cleaning up temp directory: {cleanup_error}")
 
 @app.route('/retrain', methods=['POST'])
 def retrain():
@@ -165,111 +176,59 @@ def retrain():
     try:
         logger.info("Retrain request received")
         
-        if retrain_model is None:
+        if retrain_model.__name__ == 'safe_retrain':
             return jsonify({'error': 'Retrain module not loaded'}), 500
         
-        # Validate request
         if 'zip_file' not in request.files:
             return jsonify({'error': 'No zip_file in request.files'}), 400
         
         zip_file = request.files['zip_file']
-        if zip_file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-            
         filename = secure_filename(zip_file.filename)
+        
         if not filename.endswith('.zip'):
             return jsonify({'error': 'Uploaded file must be a .zip file'}), 400
         
         logger.info(f"Processing zip file: {filename}")
         
-        # Create temporary directory
-        temp_dir = "temp_retrain_data"
+        temp_dir = os.path.join(os.getcwd(), "temp_retrain_data")
         os.makedirs(temp_dir, exist_ok=True)
         
-        # Save and extract zip file
         zip_file_path = os.path.join(temp_dir, filename)
         zip_file.save(zip_file_path)
         logger.info(f"Zip file saved to: {zip_file_path}")
         
-        # Extract zip file
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
-        logger.info("Zip file extracted successfully")
+        logger.info("Zip file extracted successfully.")
         
-        # List contents for debugging
-        extracted_contents = []
-        for root, dirs, files in os.walk(temp_dir):
-            level = root.replace(temp_dir, '').count(os.sep)
-            indent = ' ' * 2 * level
-            logger.info(f"{indent}{os.path.basename(root)}/")
-            subindent = ' ' * 2 * (level + 1)
-            for file in files:
-                logger.info(f"{subindent}{file}")
-                extracted_contents.append(os.path.join(root, file))
+        extracted_dir_name = os.path.splitext(filename)[0]
+        actual_data_dir = os.path.join(temp_dir, extracted_dir_name)
         
-        # Find the actual data directory (skip the zip file itself)
-        data_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
-        if data_dirs:
-            actual_data_dir = os.path.join(temp_dir, data_dirs[0])
-            logger.info(f"Using data directory: {actual_data_dir}")
-        else:
-            actual_data_dir = temp_dir
-            logger.info(f"Using temp directory directly: {actual_data_dir}")
+        if not os.path.isdir(actual_data_dir):
+            logger.error(f"Expected directory {actual_data_dir} not found after extraction.")
+            return jsonify({'error': 'Failed to find extracted data directory.'}), 500
+
+        logger.info(f"Using data directory: {actual_data_dir}")
         
-        # Start retraining
-        logger.info("Starting model retraining...")
-        history = retrain_model(actual_data_dir)
-        logger.info("Retraining completed successfully")
+        # Start the retraining process in a background thread
+        thread = threading.Thread(target=retrain_async, args=(actual_data_dir,))
+        thread.daemon = True
+        thread.start()
         
-        # Extract metrics safely
-        metrics = {}
-        try:
-            if hasattr(history, 'history') and history.history:
-                h = history.history
-                metrics = {
-                    'accuracy': float(h.get('accuracy', [0])[-1]),
-                    'val_accuracy': float(h.get('val_accuracy', [0])[-1]),
-                    'loss': float(h.get('loss', [1])[-1]),
-                    'val_loss': float(h.get('val_loss', [1])[-1]),
-                    'precision': float(h.get('precision', [None])[-1]) if 'precision' in h and h['precision'][-1] is not None else None,
-                    'recall': float(h.get('recall', [None])[-1]) if 'recall' in h and h['recall'][-1] is not None else None,
-                    'roc_auc': float(h.get('roc_auc', [None])[-1]) if 'roc_auc' in h and h['roc_auc'][-1] is not None else None
-                }
-            else:
-                metrics = {
-                    'accuracy': 0.5,
-                    'val_accuracy': 0.5,
-                    'loss': 1.0,
-                    'val_loss': 1.0,
-                    'precision': None,
-                    'recall': None,
-                    'roc_auc': None
-                }
-        except Exception as metrics_error:
-            logger.error(f"Error extracting metrics: {str(metrics_error)}")
-            metrics = {'error': 'Could not extract training metrics'}
-        
+        # Immediately return a response to the client
         return jsonify({
-            'message': 'Retraining completed successfully.',
-            'metrics': metrics,
-            'status': 'success'
-        })
+            'message': 'Retraining started in the background. The process may take several minutes.',
+            'status': 'accepted'
+        }), 202
         
     except Exception as e:
-        logger.error(f"Error in retrain route: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Retraining failed: {str(e)}'}), 500
-        
-    finally:
-        # Cleanup temporary directory
+        logger.error(f"Error in retrain route: {e}", exc_info=True)
         if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                logger.info("Temporary directory cleaned up")
-            except Exception as cleanup_error:
-                logger.error(f"Error cleaning up temp directory: {str(cleanup_error)}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify({'error': f'Retraining failed to start: {e}'}), 500
 
 if __name__ == '__main__':
+    # Use a longer timeout for gunicorn, which is configured in render.yaml
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting app on port {port}")
     app.run(debug=False, host='0.0.0.0', port=port)
