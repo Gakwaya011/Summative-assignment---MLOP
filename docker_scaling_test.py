@@ -188,4 +188,4 @@ class DockerScalingSimulator:
             ax4.set_title('Burst Traffic Response Times')
             ax4.set_xticks(range(len(phases)))
             ax4.set_xticklabels([p.split()[0] for p in phases], rotation=45)
-            ax4.grid(True, alpha=0.3
+            ax4.grid(True, alpha=0.3)

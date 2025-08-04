@@ -151,69 +151,72 @@ def make_prediction(image_bytes):
         tuple: (predicted_class, confidence)
     """
     global model
-    
+
     try:
         # Load model if not already loaded
         if model is None:
             if not load_model():
                 logger.error("Could not load model")
                 return "error_no_model", 0.0
-        
+
         # Basic input validation
         if not image_bytes:
             logger.error("No image bytes provided")
             return "error_no_data", 0.0
-        
+
         if not isinstance(image_bytes, bytes):
             logger.error(f"Invalid image_bytes type: {type(image_bytes)}")
             return "error_invalid_type", 0.0
-        
+
         logger.info(f"Processing image with {len(image_bytes)} bytes")
-        
+
         # Preprocess image
         processed_image = simple_preprocess_image(image_bytes)
         if processed_image is None:
             logger.error("Image preprocessing failed")
             return "error_preprocessing", 0.0
-        
-        # Make prediction
+
+        # Model check
         if not TF_AVAILABLE or model is None:
-            logger.warning("Model not available, returning random prediction")
+            logger.warning("Model not available, returning unknown")
             return "unknown", 0.5
-        
-        try:
-            predictions = model.predict(processed_image, verbose=0)
-            logger.info(f"Model prediction successful, shape: {predictions.shape}")
-            
-            # Handle different prediction formats
-            if len(predictions.shape) == 2:
-                if predictions.shape[1] > 1:
-                    # Multi-class classification
-                    predicted_index = np.argmax(predictions[0])
-                    confidence = float(predictions[0][predicted_index])
-                    predicted_class = class_names[min(predicted_index, len(class_names) - 1)]
-                else:
-                    # Binary classification
-                    confidence = float(predictions[0][0])
-                    predicted_class = class_names[0] if confidence > 0.5 else "background"
-            else:
-                # Single prediction
-                confidence = float(predictions[0])
-                predicted_class = class_names[0] if confidence > 0.5 else "background"
-            
-            # Ensure valid confidence range
-            confidence = max(0.0, min(1.0, confidence))
-            
-            logger.info(f"Prediction: {predicted_class}, Confidence: {confidence:.4f}")
-            return str(predicted_class), float(confidence)
-            
-        except Exception as pred_error:
-            logger.error(f"Model prediction error: {pred_error}")
-            return "error_prediction", 0.0
-        
+
+        # Make prediction
+        predictions = model.predict(processed_image, verbose=0)
+        logger.info(f"Prediction output: {predictions}")
+
+        # Interpret prediction based on output shape
+        if len(predictions.shape) == 2 and predictions.shape[1] > 1:
+            # Multi-class classification (softmax)
+            predicted_index = int(np.argmax(predictions[0]))
+            confidence = float(predictions[0][predicted_index])
+            predicted_class = (
+                class_names[predicted_index] if predicted_index < len(class_names)
+                else "unknown"
+            )
+
+        elif len(predictions.shape) == 2 and predictions.shape[1] == 1:
+            # Binary classification (sigmoid)
+            confidence = float(predictions[0][0])
+            predicted_class = class_names[0] if confidence > 0.5 else class_names[-1]
+
+        elif len(predictions.shape) == 1:
+            # Single-output fallback (shouldn’t happen ideally)
+            confidence = float(predictions[0])
+            predicted_class = class_names[0] if confidence > 0.5 else class_names[-1]
+
+        else:
+            logger.error(f"Unexpected prediction shape: {predictions.shape}")
+            return "error_model_type_mismatch", 0.0
+
+        confidence = round(max(0.0, min(1.0, confidence)), 4)
+        logger.info(f"Predicted class: {predicted_class}, Confidence: {confidence}")
+        return predicted_class, confidence
+
     except Exception as e:
         logger.error(f"Unexpected error in make_prediction: {e}")
         return "error_unexpected", 0.0
+
 
 # Initialize model when module is imported
 try:
