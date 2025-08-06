@@ -1,4 +1,5 @@
 import os
+import requests
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 
@@ -7,18 +8,35 @@ IMG_HEIGHT = 128
 IMG_WIDTH = 128
 CLASS_NAMES = ['Car', 'Motorcycle']
 
-# Set your model path here — adjust as needed
+# Model file setup
+MODEL_URL = "https://huggingface.co/Brillant011/vehicle-classifier-model/resolve/main/vehicle_classifier_model.keras"
 current_script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_script_dir, os.pardir))
 MODEL_PATH = os.path.join(project_root, 'models', 'vehicle_classifier_model.keras')
 
+# Download model from Hugging Face if not present
+def download_model_if_missing():
+    if not os.path.exists(MODEL_PATH):
+        print("Downloading model from Hugging Face...")
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        try:
+            response = requests.get(MODEL_URL)
+            response.raise_for_status()
+            with open(MODEL_PATH, "wb") as f:
+                f.write(response.content)
+            print("Model downloaded successfully.")
+        except Exception as e:
+            print(f"Failed to download model: {e}")
+
 # Load model once globally
 try:
+    download_model_if_missing()
     model = tf.keras.models.load_model(MODEL_PATH)
     print("Model loaded successfully for prediction.")
 except Exception as e:
     print(f"Error loading model from {MODEL_PATH}: {e}")
     model = None
+
 
 def make_prediction(image_file):
     if model is None:
