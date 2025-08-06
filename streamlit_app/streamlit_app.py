@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use('Agg')
 
 # --- Constants ---
-API_URL = " https://vehicle-classifier-ui.onrender.com"
+API_URL = "https://vehicle-classifier-api.onrender.com"
 PREDICT_ENDPOINT = f"{API_URL}/predict"
 RETRAIN_ENDPOINT = f"{API_URL}/retrain"
 
