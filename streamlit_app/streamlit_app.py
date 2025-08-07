@@ -1,10 +1,11 @@
+# vehicle_classifier_app.py
+
 import streamlit as st
 import requests
 import base64
-import os
 from io import BytesIO
-import pandas as pd
 import matplotlib.pyplot as plt
+import pandas as pd
 
 # --- App Configuration ---
 st.set_page_config(
@@ -14,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Force matplotlib to use non-GUI backend for server deployment
+# Force matplotlib to use non-GUI backend
 import matplotlib
 matplotlib.use('Agg')
 
@@ -29,7 +30,6 @@ st.markdown("Upload a photo of a car or a motorcycle for a prediction, or upload
 # --- Prediction Function ---
 def get_prediction(image_bytes):
     try:
-        # Force convert to JPEG bytes using PIL (ensures clean decoding on backend)
         from PIL import Image
         img = Image.open(BytesIO(image_bytes)).convert("RGB")
         buffered = BytesIO()
@@ -38,192 +38,169 @@ def get_prediction(image_bytes):
 
         base64_encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
         payload = {"image": base64_encoded_image}
-        response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=30)
+
+        response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=60)
         response.raise_for_status()
+
         result = response.json()
         return result.get("predicted_class"), result.get("confidence")
+
     except requests.exceptions.RequestException as e:
-        st.error(f"API request failed: {e}")
+        st.error("🔴 API request failed")
+        st.exception(e)
         return None, None
     except Exception as e:
-        st.error(f"Prediction error: {e}")
+        st.error("❌ Prediction failed")
+        st.exception(e)
         return None, None
 
-# --- Retrain Function ---
+# --- Retraining Function ---
 def trigger_retraining(zip_file):
     try:
-        # Reset file pointer to beginning
         zip_file.seek(0)
         files = {'zip_file': (zip_file.name, zip_file, 'application/zip')}
-        
-        response = requests.post(RETRAIN_ENDPOINT, files=files, timeout=600)
+        response = requests.post(RETRAIN_ENDPOINT, files=files, timeout=900)
         response.raise_for_status()
-        result = response.json()
-        return result
+        return response.json()
     except requests.exceptions.Timeout:
-        st.error("Retraining request timed out. The process might still be running.")
+        st.error("⏳ Retraining timed out. Try again later.")
         return None
     except requests.exceptions.RequestException as e:
-        st.error(f"API request failed: {e}")
+        st.error("🔴 Retraining request failed")
+        st.exception(e)
         return None
     except Exception as e:
-        st.error(f"Retraining error: {e}")
+        st.error("❌ Retraining failed")
+        st.exception(e)
         return None
 
-# --- Health Check ---
+# --- API Health Check ---
 def check_api_health():
     try:
         response = requests.get(API_URL, timeout=10)
         return response.status_code == 200
-    except:
+    except Exception as e:
+        st.warning("⚠️ API unreachable")
         return False
 
-# --- API Status ---
+# --- Sidebar: API Status ---
 with st.sidebar:
     st.header("API Status")
     if check_api_health():
         st.success("🟢 API is online")
     else:
         st.error("🔴 API is offline")
-    
+
     st.markdown("---")
     st.markdown("**API Endpoints:**")
     st.code(f"Predict: {PREDICT_ENDPOINT}")
     st.code(f"Retrain: {RETRAIN_ENDPOINT}")
 
-# --- UI: Prediction ---
+# --- UI: Predict ---
 st.header("🔍 Predict a Vehicle")
 uploaded_file_predict = st.file_uploader(
-    "Choose a vehicle image...", 
+    "Upload a vehicle image...",
     type=["jpg", "jpeg", "png"],
     key="predict_uploader"
 )
 
 if uploaded_file_predict:
     st.image(uploaded_file_predict, caption='Uploaded Image', use_column_width=True)
-    
+
     if st.button("🎯 Make Prediction", type="primary"):
-        with st.spinner("Making prediction..."):
-            # Reset file pointer and read bytes
+        with st.spinner("Processing prediction..."):
             uploaded_file_predict.seek(0)
             image_bytes = uploaded_file_predict.read()
-            
+
             predicted_class, confidence = get_prediction(image_bytes)
-            
-            if predicted_class and confidence is not None:
-                st.success("✅ Prediction complete!")
-                
+
+            if predicted_class is not None and confidence is not None:
+                st.success("✅ Prediction successful")
+
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("Prediction", predicted_class)
                 with col2:
                     st.metric("Confidence", f"{confidence:.2%}")
-                
-                # Visual confidence bar
+
                 st.progress(confidence)
-                
+
                 if confidence > 0.8:
-                    st.success("High confidence prediction! 🎉")
+                    st.success("High confidence prediction 🎯")
                 elif confidence > 0.6:
                     st.info("Medium confidence prediction")
                 else:
                     st.warning("Low confidence - consider using a clearer image")
             else:
-                st.error("❌ Prediction failed. Please try again.")
+                st.error("❌ Could not get a prediction from the API")
 
 st.divider()
 
-# --- UI: Retraining ---
-st.header("🔄 Retrain Model with New Data")
+# --- UI: Retrain ---
+st.header("🔄 Retrain Model")
 st.markdown(
     """
-    Upload a zip file containing new images to retrain the model. 
-    
-    **Required structure:**
+    Upload a `.zip` file with your new training images.
+
+    **Folder structure:**
     ```
     your_data.zip
     ├── Cars/
     │   ├── car1.jpg
-    │   ├── car2.jpg
     │   └── ...
     └── Motorcycles/
         ├── bike1.jpg
-        ├── bike2.jpg
         └── ...
     ```
     """
 )
 
 uploaded_file_retrain = st.file_uploader(
-    "Choose a zip file with new data...", 
+    "Upload ZIP for retraining...",
     type=["zip"],
     key="retrain_uploader"
 )
 
 if uploaded_file_retrain:
-    st.info(f"📁 File '{uploaded_file_retrain.name}' uploaded ({uploaded_file_retrain.size} bytes)")
-    
-    # Show file size warning
-    if uploaded_file_retrain.size > 50 * 1024 * 1024:  # 50MB
-        st.warning("⚠️ Large file detected. Training might take longer or fail due to memory limits.")
-    
+    st.info(f"📁 File uploaded: `{uploaded_file_retrain.name}` ({uploaded_file_retrain.size} bytes)")
+
+    if uploaded_file_retrain.size > 50 * 1024 * 1024:
+        st.warning("⚠️ File is large — retraining may take longer or fail on limited servers.")
+
     if st.button("🚀 Start Retraining", type="primary"):
-        with st.spinner("Starting retraining process... This may take several minutes..."):
+        with st.spinner("Retraining in progress..."):
             retrain_result = trigger_retraining(uploaded_file_retrain)
 
             if retrain_result:
-                st.success(retrain_result.get('message', '✅ Retraining completed!'))
+                st.success(retrain_result.get('message', '✅ Retraining complete'))
 
                 metrics = retrain_result.get('metrics', {})
                 if metrics:
                     st.subheader("📊 Retraining Metrics")
-                    
-                    # Display metrics in columns
                     cols = st.columns(len(metrics))
-                    for i, (metric_name, metric_value) in enumerate(metrics.items()):
+                    for i, (k, v) in enumerate(metrics.items()):
                         with cols[i]:
-                            st.metric(
-                                label=metric_name.replace('_', ' ').title(),
-                                value=f"{metric_value:.4f}" if isinstance(metric_value, float) else str(metric_value)
-                            )
-                    
-                    # Plot metrics bar chart
-                    if len(metrics) > 1:
-                        st.subheader("📈 Metrics Visualization")
-                        
-                        # Filter numeric metrics for plotting
-                        numeric_metrics = {k: v for k, v in metrics.items() 
-                                         if isinstance(v, (int, float)) and k != 'loss'}
-                        
-                        if numeric_metrics:
-                            fig, ax = plt.subplots(figsize=(10, 6))
-                            metric_names = list(numeric_metrics.keys())
-                            metric_values = list(numeric_metrics.values())
-                            
-                            bars = ax.bar(metric_names, metric_values, 
-                                        color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'])
-                            ax.set_ylim(0, 1)
-                            ax.set_title('Retraining Performance Metrics', fontsize=16, fontweight='bold')
-                            ax.set_ylabel('Score', fontsize=12)
-                            
-                            # Add value labels on bars
-                            for bar, value in zip(bars, metric_values):
-                                height = bar.get_height()
-                                ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                                       f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
-                            
-                            plt.xticks(rotation=45, ha='right')
-                            plt.tight_layout()
-                            st.pyplot(fig)
-                        
+                            st.metric(k.replace("_", " ").title(), f"{v:.4f}" if isinstance(v, float) else str(v))
+
+                    # Chart
+                    numeric_metrics = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+                    if numeric_metrics:
+                        st.subheader("📈 Metric Chart")
+                        fig, ax = plt.subplots(figsize=(8, 4))
+                        ax.bar(numeric_metrics.keys(), numeric_metrics.values())
+                        ax.set_ylabel("Score")
+                        ax.set_ylim(0, 1)
+                        ax.set_title("Model Performance")
+                        plt.xticks(rotation=45, ha="right")
+                        st.pyplot(fig)
                 else:
-                    st.info("ℹ️ No detailed metrics available from this training session.")
+                    st.info("ℹ️ No metrics returned.")
             else:
-                st.error("❌ Retraining failed. Please check your data format and try again.")
+                st.error("❌ Retraining failed")
 
 # --- Footer ---
 st.markdown("---")
-st.markdown("**💡 Tips:**")
-st.markdown("- Use clear, well-lit images for better predictions")
-st.markdown("- Ensure zip files contain proper folder structure for retraining")
-st.markdown("- Training time depends on data size and server load")
+st.markdown("**Tips:**")
+st.markdown("- Use sharp, well-lit images")
+st.markdown("- Make sure folder names are correct (`Cars/`, `Motorcycles/`)")
+st.markdown("- Retraining may take a few minutes depending on data size")
