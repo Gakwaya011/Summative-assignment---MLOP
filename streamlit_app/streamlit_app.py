@@ -39,7 +39,7 @@ def get_prediction(image_bytes):
         base64_encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
         payload = {"image": base64_encoded_image}
 
-        response = requests.post(PREDICT_ENDPOINT, json=payload, timeout=60)
+        response = requests.post(PREDICT_ENDPOINT, json=payload)
         response.raise_for_status()
 
         result = response.json()
