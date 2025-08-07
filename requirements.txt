@@ -10,3 +10,5 @@ opencv-python
 gunicorn
 scikit-learn
 flask-cors
+tflite-runtime
+requests
